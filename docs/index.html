@@ -1779,7 +1779,9 @@ function pageReports() {
   w.append(el("div", { class: "toolbar" }, [
     el("button", {
       class: "btn btn-primary", html: ICON.down + "전체 보고서 ZIP으로 받기", onclick: () => {
-        const files = Object.values(reps).map(r => ({ name: fileFor(c, r.file), text: toCsv(csvRows(r)) }));
+        /* ZIP 내부 파일명은 ASCII로 — 구형 unzip이 UTF-8 파일명을 못 읽는 경우가 있다.
+           브랜드명은 ZIP 파일명 자체에 들어간다. */
+        const files = Object.values(reps).map(r => ({ name: r.file, text: toCsv(csvRows(r)) }));
         downloadBlob((c.cfg.biz.name || "campaign").replace(/\s+/g, "_") + "_보고서.zip", makeZip(files));
       }
     }),
