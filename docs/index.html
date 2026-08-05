@@ -694,22 +694,112 @@ function qualityScore(kwObj, ad, matchType, prof) {
 const posCtr = p => p <= 1.2 ? 0.082 : p <= 2 ? 0.052 : p <= 3 ? 0.034 : p <= 4 ? 0.021 : 0.011;
 
 /* ── 시뮬레이션 엔진 ─────────────────────────────────── */
-function simulate(cfg) {
+/* ── 시간대 블록 · 기기 ───────────────────────────────── */
+const HOUR_BLOCKS = [
+  { key: "dawn", name: "새벽 (0~6시)", from: 0, to: 6 },
+  { key: "morning", name: "오전 (6~12시)", from: 6, to: 12 },
+  { key: "afternoon", name: "오후 (12~18시)", from: 12, to: 18 },
+  { key: "evening", name: "저녁 (18~24시)", from: 18, to: 24 },
+];
+const DEVICES = ["mobile", "desktop", "tablet"];
+const DEV_CVR = { mobile: 0.86, desktop: 1.28, tablet: 0.72 };
+const BLOCK_CVR = { dawn: 0.45, morning: 1.10, afternoon: 1.18, evening: 0.92 };
+const DEFAULT_BIDADJ = {
+  device: { mobile: 0, desktop: 0, tablet: 0 },
+  block: { dawn: 0, morning: 0, afternoon: 0, evening: 0 },
+  weekend: 0,
+};
+
+/* ── 제외 키워드 ──────────────────────────────────────
+   실제 Google Ads와 같은 규칙:
+   일치 = 검색어가 정확히 같을 때, 구문 = 그 표현이 순서대로 들어 있을 때,
+   확장 = 단어가 모두 들어 있을 때(순서 무관).                        */
+function negBlocks(query, negs) {
+  if (!negs || !negs.length) return null;
+  const q = String(query).toLowerCase().trim();
+  const qTok = q.split(/\s+/);
+  for (const n of negs) {
+    const t = String(n.text || "").toLowerCase().trim();
+    if (!t) continue;
+    if (n.match === "exact") { if (q === t) return n; }
+    else if (n.match === "phrase") { if (q.includes(t)) return n; }
+    else {
+      const nt = t.split(/\s+/);
+      if (nt.every(w => qTok.some(x => x.includes(w)))) return n;
+    }
+  }
+  return null;
+}
+
+/* ── 디스플레이 게재위치 ──────────────────────────────
+   검색의 '검색어'에 해당한다. 타겟팅이 넓을수록 무관한 앱·사이트가 섞인다.
+   무관 게재위치는 오히려 CTR이 높다 — 모바일 앱의 실수 클릭 때문. */
+const PLACEMENT_JUNK = [
+  "모바일 게임 앱 · 퍼즐", "무료 배경화면 앱", "배터리 절약 앱", "모바일 게임 앱 · 디펜스",
+  "만화 뷰어 앱", "날씨 위젯 앱", "손전등 앱", "모바일 게임 앱 · 러닝",
+];
+const PLACEMENT_LOOSE = [
+  "종합 포털 뉴스면", "연예 뉴스 사이트", "커뮤니티 게시판", "블로그 플랫폼", "날씨 정보 사이트",
+];
+const PLACEMENT_REL_SUFFIX = ["전문 매체", "정보 블로그", "리뷰 사이트", "커뮤니티", "비교 사이트"];
+const DISPLAY_TARGETING = {
+  audience: { name: "잠재고객 (관심분야·구매의도)", reach: 1.00, junk: 0.34, loose: 0.30, desc: "가장 넓게 도달합니다. 무관한 앱·사이트가 많이 섞입니다." },
+  topic:    { name: "주제", reach: 0.62, junk: 0.20, loose: 0.32, desc: "콘텐츠 주제로 좁힙니다. 도달과 정확도의 중간." },
+  placement:{ name: "게재위치 직접 지정", reach: 0.24, junk: 0.05, loose: 0.18, desc: "내가 고른 곳에만 노출합니다. 정확하지만 물량이 적습니다." },
+};
+function buildPlacements(prof, disp, rng) {
+  const mode = DISPLAY_TARGETING[disp.targeting] || DISPLAY_TARGETING.audience;
+  const head = prof.ind.name.split(" · ")[0];
+  const rel = PLACEMENT_REL_SUFFIX.map(s => head + " " + s);
+  const out = [];
+  const push = (arr, kind, total) => arr.forEach((n, i) => out.push({ name: n, rel: kind, raw: (0.5 + rng()) * total / arr.length }));
+  push(rel, "relevant", 1 - mode.junk - mode.loose);
+  push(PLACEMENT_LOOSE, "loose", mode.loose);
+  push(PLACEMENT_JUNK, "junk", mode.junk);
+  const excluded = new Set((disp.excludedPlacements || []).map(s => String(s).trim()));
+  const live = out.filter(p => !excluded.has(p.name));
+  const sum = live.reduce((s, p) => s + p.raw, 0) || 1;
+  live.forEach(p => { p.w = p.raw / sum; });
+  return { list: live, blocked: out.filter(p => excluded.has(p.name)), mode };
+}
+/* 디스플레이 게재위치별 성과 계수 — 무관한 곳은 클릭은 나오지만 전환이 없다 */
+const PLACE_CTR = { relevant: 1.0, loose: 1.25, junk: 2.6 };
+const PLACE_CVR = { relevant: 1.0, loose: 0.22, junk: 0.02 };
+
+/* ── 캠페인 설정 정규화 ───────────────────────────────
+   예전 형태(keywords + ad 단일)를 광고그룹 구조로 올린다. */
+function normCfg(cfg) {
+  const c = { ...cfg };
+  c.type = c.type || "search";
+  c.negatives = c.negatives || [];
+  c.bidAdj = { ...DEFAULT_BIDADJ, ...(c.bidAdj || {}),
+    device: { ...DEFAULT_BIDADJ.device, ...((c.bidAdj || {}).device || {}) },
+    block: { ...DEFAULT_BIDADJ.block, ...((c.bidAdj || {}).block || {}) } };
+  c.display = { targeting: "audience", frequencyCap: 3, excludedPlacements: [], ...(c.display || {}) };
+  if (!c.adGroups) {
+    c.adGroups = [{ name: c.adGroup || "광고그룹 1", keywords: c.keywords || [], ad: c.ad }];
+  }
+  return c;
+}
+
+function simulate(rawCfg) {
+  const cfg = normCfg(rawCfg);
   const prof = bizProfile(cfg.biz);
+  const isDisplay = cfg.type === "display";
+
   /* 전환 액션 설정이 전환 집계에 그대로 반영된다 */
   const cAct = cfg.biz.conv || DEFAULT_CONV;
   const catRate = (CONV_CATEGORIES[cAct.category] || CONV_CATEGORIES.purchase).rate;
   const countMult = (COUNT_MODES[cAct.countMode] || COUNT_MODES.one).mult;
   const convLag = prof.ind.lag;
-  /* 전환 추적 기간이 이 업종의 전환 지연보다 짧으면 늦게 일어난 전환을 놓친다 */
   const windowCapture = clamp(1 - Math.max(0, convLag - cAct.window / 3) * 0.1, 0.4, 1);
-  /* 시드는 '트래픽을 결정하는 것'만으로 만든다.
-     전환 집계 방식(conv)이나 채점 목표(targets)를 바꿨다고 노출수까지
-     뒤바뀌면 수강생이 원인을 짚을 수 없다. */
+
+  /* 시드는 '트래픽을 결정하는 것'만으로 만든다. */
   const b0 = cfg.biz;
   const seed = hashStr(JSON.stringify({
-    g: cfg.goal, b: cfg.bidding, bd: cfg.budget, cpa: cfg.targetCpa, cpc: cfg.maxCpc,
-    geo: cfg.geo, lang: cfg.lang, kws: cfg.keywords, ad: cfg.ad, net: cfg.displayExpansion,
+    t: cfg.type, g: cfg.goal, b: cfg.bidding, bd: cfg.budget, cpa: cfg.targetCpa, cpc: cfg.maxCpc,
+    geo: cfg.geo, lang: cfg.lang, ag: cfg.adGroups, neg: cfg.negatives, adj: cfg.bidAdj,
+    net: cfg.displayExpansion, disp: cfg.display,
     biz: [b0.name, b0.industry, b0.model, b0.url, b0.desc, b0.audience, b0.exclude, b0.period, b0.price],
   }));
   const rng = mulberry32(seed);
@@ -717,168 +807,220 @@ function simulate(cfg) {
   const goal = GOALS[cfg.goal];
   const bid = BIDDING[cfg.bidding];
   const geo = GEOS[cfg.geo], lang = LANGS[cfg.lang];
+  const adj = cfg.bidAdj;
 
-  /* 키워드 준비 — 전부 이 브랜드의 프로필을 기준으로 평가된다 */
-  const kws = cfg.keywords.map(k => {
-    const o = classifyKeyword(k.text, prof);
-    const q = qualityScore(o, cfg.ad, k.match, prof);
-    const queries = buildQueries(o, k.match, mulberry32(hashStr(k.text + k.match + cfg.biz.industry)), prof);
-    return { ...o, match: k.match, qs: q.qs, qsParts: q.parts, sameDomain: q.sameDomain, queries };
+  /* ── 광고그룹 · 키워드 준비 ── */
+  const groups = cfg.adGroups.map((g, gi) => {
+    const ad = g.ad;
+    const extBoost = 1
+      + clamp(ad.sitelinks.length / 4, 0, 1) * 0.12
+      + clamp(ad.callouts.length / 4, 0, 1) * 0.06
+      + clamp((ad.headlines.length - 3) / 12, 0, 1) * 0.08;
+    const kws = (g.keywords || []).map(k => {
+      const o = classifyKeyword(k.text, prof);
+      const q = qualityScore(o, ad, k.match, prof);
+      let queries = buildQueries(o, k.match, mulberry32(hashStr(k.text + k.match + cfg.biz.industry)), prof);
+      /* 제외 키워드로 걸러진 검색어는 아예 노출되지 않는다 */
+      queries = queries.map(x => ({ ...x, blockedBy: negBlocks(x.q, cfg.negatives) }));
+      const live = queries.filter(x => !x.blockedBy);
+      const liveSum = live.reduce((s, x) => s + x.share, 0) || 1;
+      live.forEach(x => { x.w = x.share / liveSum; });
+      /* 제외 키워드가 키워드 자기 자신까지 막아버린 경우 */
+      const selfBlocked = !!(queries.find(x => x.q === o.text) || {}).blockedBy;
+      const blockedShare = 1 - (liveSum / (queries.reduce((s, x) => s + x.share, 0) || 1));
+      return { ...o, match: k.match, qs: q.qs, qsParts: q.parts, sameDomain: q.sameDomain,
+        group: g.name, groupIndex: gi, queries: live, allQueries: queries, selfBlocked, blockedShare };
+    });
+    return { name: g.name, ad, extBoost, kws, index: gi };
   });
+  const kws = groups.flatMap(g => g.kws);
 
-  /* 디스플레이 네트워크 확장.
-     인벤토리는 폭발적으로 늘지만 클릭률·전환율이 검색보다 훨씬 낮고 클릭은 싸다.
-     검색분과 디스플레이분을 합친 혼합 배수로 환산해 적용한다. */
+  /* 디스플레이 확장 (검색 캠페인 옵션) */
   const DISPLAY = { extraVol: 6, ctr: 0.12, cvr: 0.06, cpc: 0.30 };
-  let disp = { vol: 1, ctr: 1, cvr: 1, cpc: 1 };
-  if (cfg.displayExpansion) {
+  let dispMix = { vol: 1, ctr: 1, cvr: 1, cpc: 1 };
+  if (!isDisplay && cfg.displayExpansion) {
     const v = 1 + DISPLAY.extraVol;
     const clickRatio = 1 + DISPLAY.extraVol * DISPLAY.ctr;
-    disp = {
-      vol: v,
-      ctr: clickRatio / v,
+    dispMix = { vol: v, ctr: clickRatio / v,
       cvr: (1 + DISPLAY.extraVol * DISPLAY.ctr * DISPLAY.cvr) / clickRatio,
-      cpc: (1 + DISPLAY.extraVol * DISPLAY.ctr * DISPLAY.cpc) / clickRatio,
-    };
+      cpc: (1 + DISPLAY.extraVol * DISPLAY.ctr * DISPLAY.cpc) / clickRatio };
   }
 
-  /* 광고 확장·자산이 주는 CTR 이득.
-     품질평가점수는 정수로 반올림되어 확장의 효과가 묻히므로, 광고 면적이
-     넓어지는 효과는 CTR에 직접 반영한다(실제로도 사이트링크는 CTR을 올린다). */
-  const adAssets = cfg.ad;
-  const extBoost = 1
-    + clamp(adAssets.sitelinks.length / 4, 0, 1) * 0.12
-    + clamp(adAssets.callouts.length / 4, 0, 1) * 0.06
-    + clamp((adAssets.headlines.length - 3) / 12, 0, 1) * 0.08;
+  /* 디스플레이 캠페인 게재위치 */
+  const placeSet = isDisplay ? buildPlacements(prof, cfg.display, mulberry32(hashStr(cfg.display.targeting + cfg.biz.industry))) : null;
+  const freqCap = isDisplay ? clamp(cfg.display.frequencyCap || 3, 1, 20) : 1;
 
   /* 입찰가 결정 */
-  const marketAvg = kws.reduce((s, k) => s + k.marketCpc, 0) / Math.max(1, kws.length);
+  const marketAvg = isDisplay
+    ? Math.round(340 * prof.ind.cpc)
+    : (kws.reduce((s, k) => s + k.marketCpc, 0) / Math.max(1, kws.length)) || 1000;
   let bidCap;
   if (cfg.bidding === "manual_cpc") bidCap = cfg.maxCpc;
   else if (cfg.bidding === "max_clicks") bidCap = cfg.maxCpc || marketAvg * 1.15;
-  else if (cfg.bidding === "target_cpa") {
-    const expCvr = goal.cvr * 1.0;
-    bidCap = cfg.targetCpa * expCvr;         // 타겟 CPA가 낮으면 입찰가가 시장 아래로 떨어진다
-  } else bidCap = marketAvg * 1.2;           // 전환수 최대화
+  else if (cfg.bidding === "target_cpa") bidCap = cfg.targetCpa * goal.cvr;
+  else bidCap = marketAvg * 1.2;
 
-  /* 일자별 시뮬레이션 */
+  /* 집계 그릇 */
   const daily = [];
-  const kwAgg = kws.map(k => ({ kw: k, impr: 0, clicks: 0, cost: 0, conv: 0, lostBudget: 0, lostRank: 0 }));
-  const qAgg = new Map();
-  const devSplit = prof.ind.dev;
-  const devAgg = { mobile: { impr: 0, clicks: 0, cost: 0, conv: 0 }, desktop: { impr: 0, clicks: 0, cost: 0, conv: 0 }, tablet: { impr: 0, clicks: 0, cost: 0, conv: 0 } };
+  const kwAgg = kws.map(k => ({ kw: k, group: k.group, impr: 0, clicks: 0, cost: 0, conv: 0, lostRank: 0 }));
+  const kwIndex = new Map(kws.map((k, i) => [k.group + "||" + k.text + "||" + k.match, i]));
+  const groupAgg = groups.map(g => ({ name: g.name, impr: 0, clicks: 0, cost: 0, conv: 0,
+    avgQs: g.kws.length ? g.kws.reduce((s, k) => s + k.qs, 0) / g.kws.length : 0, keywords: g.kws.length }));
+  const qAgg = new Map(), placeAgg = new Map(), negAgg = new Map();
+  const devAgg = {}; DEVICES.forEach(dv => devAgg[dv] = { impr: 0, clicks: 0, cost: 0, conv: 0 });
   const hourAgg = Array.from({ length: 24 }, () => ({ impr: 0, clicks: 0, cost: 0, conv: 0 }));
   const HOUR_W = HOUR_SHAPES[prof.ind.hours] || HOUR_SHAPES.daytime;
-
-  let cumConv = 0;
+  const blockShare = {}, blockHours = {};
+  HOUR_BLOCKS.forEach(b => {
+    blockHours[b.key] = [];
+    let s = 0;
+    for (let h = b.from; h < b.to; h++) { s += HOUR_W[h]; blockHours[b.key].push(h); }
+    blockShare[b.key] = s;
+  });
+  const devSplit = prof.ind.dev;
 
   for (let d = 0; d < days; d++) {
-    const dow = (d + 3) % 7;                       // 0=월 기준 오프셋
+    const dow = (d + 3) % 7;
     const weekend = dow === 5 || dow === 6;
     const season = (weekend ? prof.ind.seasonWeekend : 1.06) * (0.94 + rng() * 0.12);
-    /* 학습 기간: 스마트 입찰은 초반 성과가 나쁘다 */
     const learn = d < bid.learnDays ? 0.55 + 0.45 * (d / Math.max(1, bid.learnDays)) : 1;
     const learnCpa = d < bid.learnDays ? 1.45 - 0.45 * (d / Math.max(1, bid.learnDays)) : 1;
-    /* 경매 압력 — 경쟁사 예산·입찰이 매일 달라 낙찰 단가가 흔들린다.
-       주말·월말에 예산을 태우는 광고주가 늘어 단가가 오른다. */
     const monthEnd = d >= days - 5 ? 1.06 : 1;
     const pressure = (0.78 + rng() * 0.46) * (weekend ? 0.92 : 1.04) * monthEnd;
-    /* 전환율도 요일·컨디션에 따라 흔들린다 */
     const cvrDay = (0.82 + rng() * 0.36) * (weekend ? 0.88 : 1.05);
+    const wkAdj = weekend ? (1 + adj.weekend) : 1;
 
     let dayImpr = 0, dayClicks = 0, dayCost = 0, dayConv = 0, dayLostBudget = 0, dayLostRank = 0;
-    let budgetLeft = cfg.budget * 1.2;              // 구글은 일일예산의 최대 2배까지 변동 허용(여기선 1.2배)
+    /* 예산은 하루 전체에 걸쳐 모든 키워드·지면에 나뉘어 쓰인다.
+       먼저 제약 없는 수요를 모두 계산한 뒤, 예산을 넘으면 전체를 같은 비율로 줄인다.
+       (순서대로 소진시키면 앞쪽 키워드가 예산을 독식해 버린다.) */
+    const segs = [];
+    let rawCost = 0;
     let budgetCapped = false;
 
-    /* 키워드별 */
-    kws.forEach((k, ki) => {
-      const m = MATCH[k.match];
-      const dailyVol = (k.volume / 30) * m.reach * geo.mult * lang.mult * season * disp.vol;
-      /* 경매: 내 광고순위 vs 시장 */
-      const myRank = bidCap * k.qs;
-      const compRank = k.marketCpc * (5.2 + k.competition * 3.4) * pressure;
-      const rankRatio = myRank / compRank;
-      /* 노출 점유율(순위 기준).
-         입찰이 시장 대비 터무니없이 낮으면 경매에 아예 못 들어가므로
-         고정 하한을 두지 않는다 — 낮은 입찰은 노출 자체가 사라져야 한다. */
-      const isRank = clamp(0.96 * (1 - Math.exp(-1.9 * rankRatio)), 0, 0.94);
-      const avgPos = clamp(1 + 3.6 * Math.exp(-2.1 * rankRatio), 1, 5.2);
+    const lagRamp = convLag > 0 ? clamp((d + 1) / (convLag + 1), 0, 1) : 1;
+    const trackOk = (cAct.enabled && cfg.conversionTracking)
+      ? catRate * countMult * windowCapture * lagRamp : 0;
+    const geoFit = geo.mismatch ? 0.35 : 1;
+    const langFit = lang.mismatch ? 0.4 : 1;
 
-      let eligible = dailyVol;
-      let impr = eligible * isRank * learn;
-      const lostRankImpr = eligible - impr;
+    /* 노출 단위: (키워드 또는 게재위치) × 기기 × 시간대 블록 */
+    const units = [];
+    if (isDisplay) {
+      const pool = 52000 * geo.mult * lang.mult * season;
+      placeSet.list.forEach(p => units.push({ kind: "place", p, base: pool * p.w }));
+    } else {
+      groups.forEach(g => g.kws.forEach(k => {
+        const m = MATCH[k.match];
+        units.push({ kind: "kw", g, k, base: (k.volume / 30) * m.reach * geo.mult * lang.mult * season * dispMix.vol });
+      }));
+    }
 
-      /* 클릭 */
-      const baseCtr = posCtr(avgPos) * m.ctrMult;
-      const qsCtrBoost = 0.68 + (k.qs / 10) * 0.62;
-      /* 검색어 관련도 가중 — 확장검색은 무관 검색어가 섞여 CTR/CVR을 갉아먹는다 */
-      const relAvg = k.queries.reduce((s, q) => s + q.w * REL_WEIGHT[q.rel], 0);
-      const ctr = clamp(baseCtr * qsCtrBoost * (0.55 + relAvg * 0.6) * extBoost * disp.ctr, 0.0002, 0.35);
-      let clicks = impr * ctr;
+    for (const u of units) {
+      for (const dv of DEVICES) {
+        const devW = devSplit[dv];
+        const devMult = 1 + (adj.device[dv] || 0);
+        for (const blk of HOUR_BLOCKS) {
+          const bw = blockShare[blk.key];
+          if (bw <= 0) continue;
+          const blkMult = 1 + (adj.block[blk.key] || 0);
+          const effBid = Math.max(0, bidCap * devMult * blkMult * wkAdj);
+          let eligible = u.base * devW * bw;
+          let impr, clicks, cpc, convRate, lostRank = 0;
 
-      /* 실제 CPC: 차순위 광고순위 / 내 QS (+10원), 상한은 입찰가 */
-      /* 실현 CPC — 차순위 광고순위를 내 품질평가점수로 나눈 값.
-         시장가가 내 입찰 상한을 넘으면 그 경매는 지고, 상한 아래에서 낙찰되는
-         경매만 이긴다. 그래서 실현 CPC는 상한에 딱 붙지 않고 조금 아래에서 움직인다. */
-      const rawPrice = (compRank * 0.86) / Math.max(1, k.qs) + 10;
-      let cpc = rawPrice <= bidCap ? rawPrice : bidCap * (0.86 + 0.12 * clamp(bidCap / rawPrice, 0, 1));
-      cpc = clamp(cpc, 100, bidCap) * disp.cpc;
-      if (cfg.bidding === "max_clicks") cpc *= 0.88;
-      if (cfg.bidding === "max_conv" || cfg.bidding === "target_cpa") cpc *= learnCpa;
+          if (u.kind === "kw") {
+            const k = u.k, g = u.g, m = MATCH[k.match];
+            const myRank = effBid * k.qs;
+            const compRank = k.marketCpc * (5.2 + k.competition * 3.4) * pressure;
+            const rankRatio = myRank / Math.max(1, compRank);
+            const isRank = clamp(0.96 * (1 - Math.exp(-1.9 * rankRatio)), 0, 0.94);
+            const avgPos = clamp(1 + 3.6 * Math.exp(-2.1 * rankRatio), 1, 5.2);
+            impr = eligible * isRank * learn;
+            lostRank = eligible - impr;
+            const relAvg = k.queries.reduce((s, q) => s + q.w * REL_WEIGHT[q.rel], 0);
+            const baseCtr = posCtr(avgPos) * m.ctrMult;
+            const qsCtrBoost = 0.68 + (k.qs / 10) * 0.62;
+            const ctr = clamp(baseCtr * qsCtrBoost * (0.55 + relAvg * 0.6) * g.extBoost * dispMix.ctr, 0.0002, 0.35);
+            clicks = impr * ctr;
+            const rawPrice = (compRank * 0.86) / Math.max(1, k.qs) + 10;
+            cpc = rawPrice <= effBid ? rawPrice : effBid * (0.86 + 0.12 * clamp(effBid / rawPrice, 0, 1));
+            cpc = clamp(cpc, 100, Math.max(100, effBid)) * dispMix.cpc;
+            if (cfg.bidding === "max_clicks") cpc *= 0.88;
+            if (cfg.bidding === "max_conv" || cfg.bidding === "target_cpa") cpc *= learnCpa;
+            const landingFit = (g.ad.finalUrl && g.ad.finalUrl.startsWith("http") ? 1 : 0.25) * (0.55 + (k.sameDomain || 0) * 0.45);
+            convRate = goal.cvr * k.cvrMult * (0.6 + (k.qs / 10) * 0.7) * landingFit * geoFit * langFit * dispMix.cvr * cvrDay;
+            if (cfg.bidding === "target_cpa" || cfg.bidding === "max_conv") convRate *= (d < bid.learnDays ? 0.7 : 1.12);
+          } else {
+            /* 디스플레이 — 순위 경쟁보다 예산이 주된 제약. 빈도가 높을수록 반응이 떨어진다 */
+            const p = u.p;
+            const freqDecay = 1 / (1 + 0.14 * (freqCap - 1));
+            impr = eligible * clamp(effBid / Math.max(1, marketAvg * 1.6), 0.05, 1.6) * learn;
+            lostRank = Math.max(0, eligible - impr);
+            const ctr = clamp(0.0062 * PLACE_CTR[p.rel] * freqDecay, 0.0002, 0.08);
+            clicks = impr * ctr;
+            cpc = clamp(marketAvg * (0.55 + pressure * 0.5), 90, Math.max(100, effBid));
+            const landingFit = (groups[0].ad.finalUrl || "").startsWith("http") ? 1 : 0.3;
+            convRate = goal.cvr * 0.16 * PLACE_CVR[p.rel] * prof.ind.cvr * prof.model.cvr
+              * landingFit * geoFit * langFit * cvrDay;
+          }
 
-      let cost = clicks * cpc;
-
-      /* 예산 제약 */
-      if (cost > budgetLeft) {
-        const ratio = budgetLeft / Math.max(1, cost);
-        dayLostBudget += impr * (1 - ratio);
-        impr *= ratio; clicks *= ratio; cost = budgetLeft;
-        budgetCapped = true;
+          const cost = clicks * cpc;
+          if (impr <= 0) { dayLostRank += lostRank; continue; }
+          rawCost += cost;
+          segs.push({ u, dv, blk, bw, impr, clicks, cost, lostRank,
+            cvr: convRate * DEV_CVR[dv] * BLOCK_CVR[blk.key] * trackOk });
+        }
       }
-      budgetLeft = Math.max(0, budgetLeft - cost);
+    }
 
-      /* 전환 */
-      const landingFit = (cfg.ad.finalUrl && cfg.ad.finalUrl.startsWith("http") ? 1 : 0.25) * (0.55 + (k.sameDomain || 0) * 0.45);
-      /* 전환 지연 — 클릭 후 며칠 뒤 전환되므로 초반 며칠은 아직 집계되지 않는다 */
-      const lagRamp = convLag > 0 ? clamp((d + 1) / (convLag + 1), 0, 1) : 1;
-      const trackOk = (cAct.enabled && cfg.conversionTracking)
-        ? catRate * countMult * windowCapture * lagRamp : 0;
-      const geoFit = geo.mismatch ? 0.35 : 1;
-      const langFit = lang.mismatch ? 0.4 : 1;
-      let convRate = goal.cvr * k.cvrMult * (0.6 + (k.qs / 10) * 0.7) * landingFit * geoFit * langFit * disp.cvr * cvrDay;
-      if (cfg.bidding === "target_cpa" || cfg.bidding === "max_conv") convRate *= (d < bid.learnDays ? 0.7 : 1.12);
+    /* 예산 제약을 전체에 비례 적용 */
+    const capTotal = cfg.budget * 1.2;
+    let scale = 1;
+    if (rawCost > capTotal) { scale = capTotal / rawCost; budgetCapped = true; }
 
-      /* 검색어 단위로 쪼개서 집계 — 무관 검색어는 거의 전환되지 않는다 */
-      k.queries.forEach(q => {
-        const qi = impr * q.w, qc = clicks * q.w, qcost = cost * q.w;
-        const qconv = qc * convRate * REL_WEIGHT[q.rel] * trackOk;
-        const key = q.q + "||" + k.text;
-        const prev = qAgg.get(key) || { q: q.q, kw: k.text, match: k.match, rel: q.rel, impr: 0, clicks: 0, cost: 0, conv: 0 };
-        prev.impr += qi; prev.clicks += qc; prev.cost += qcost; prev.conv += qconv;
-        qAgg.set(key, prev);
-        dayConv += qconv;
+    for (const sg of segs) {
+      const impr = sg.impr * scale, clicks = sg.clicks * scale, cost = sg.cost * scale;
+      dayLostBudget += sg.impr * (1 - scale);
+      dayLostRank += sg.lostRank;
+      const segCvr = sg.cvr;
+      const dv = sg.dv, bw = sg.bw;
+
+      devAgg[dv].impr += impr; devAgg[dv].clicks += clicks; devAgg[dv].cost += cost;
+      blockHours[sg.blk.key].forEach(h => {
+        const hw = HOUR_W[h] / bw;
+        hourAgg[h].impr += impr * hw; hourAgg[h].clicks += clicks * hw; hourAgg[h].cost += cost * hw;
       });
 
-      const kconv = clicks * convRate * relAvg * trackOk;
-      dayImpr += impr; dayClicks += clicks; dayCost += cost; dayLostRank += lostRankImpr;
-      const a = kwAgg[ki];
-      a.impr += impr; a.clicks += clicks; a.cost += cost; a.conv += kconv;
-      a.lostBudget += impr * 0; a.lostRank += lostRankImpr;
-    });
+      let segConv = 0;
+      if (sg.u.kind === "kw") {
+        const k = sg.u.k;
+        k.queries.forEach(q => {
+          const qc = clicks * q.w, qconv = qc * segCvr * REL_WEIGHT[q.rel];
+          const key = q.q + "||" + k.text;
+          const prev = qAgg.get(key) || { q: q.q, kw: k.text, group: k.group, match: k.match, rel: q.rel, impr: 0, clicks: 0, cost: 0, conv: 0 };
+          prev.impr += impr * q.w; prev.clicks += qc; prev.cost += cost * q.w; prev.conv += qconv;
+          qAgg.set(key, prev);
+          segConv += qconv;
+        });
+        const ki = kwIndex.get(k.group + "||" + k.text + "||" + k.match);
+        const a = kwAgg[ki];
+        a.impr += impr; a.clicks += clicks; a.cost += cost; a.conv += segConv; a.lostRank += sg.lostRank;
+        const ga = groupAgg[k.groupIndex];
+        ga.impr += impr; ga.clicks += clicks; ga.cost += cost; ga.conv += segConv;
+      } else {
+        const p = sg.u.p;
+        segConv = clicks * segCvr;
+        const prev = placeAgg.get(p.name) || { name: p.name, rel: p.rel, impr: 0, clicks: 0, cost: 0, conv: 0 };
+        prev.impr += impr; prev.clicks += clicks; prev.cost += cost; prev.conv += segConv;
+        placeAgg.set(p.name, prev);
+        groupAgg[0].impr += impr; groupAgg[0].clicks += clicks; groupAgg[0].cost += cost; groupAgg[0].conv += segConv;
+      }
 
-    /* 기기·시간대 분배 */
-    for (const [dev, w] of Object.entries(devSplit)) {
-      const convW = dev === "mobile" ? 0.86 : dev === "desktop" ? 1.28 : 0.72;
-      devAgg[dev].impr += dayImpr * w; devAgg[dev].clicks += dayClicks * w;
-      devAgg[dev].cost += dayCost * w; devAgg[dev].conv += dayConv * w * convW;
+      devAgg[dv].conv += segConv;
+      blockHours[sg.blk.key].forEach(h => { hourAgg[h].conv += segConv * (HOUR_W[h] / bw); });
+      dayImpr += impr; dayClicks += clicks; dayCost += cost; dayConv += segConv;
     }
-    HOUR_W.forEach((w, h) => {
-      const convW = h >= 9 && h <= 18 ? 1.18 : h >= 0 && h <= 5 ? 0.45 : 0.9;
-      hourAgg[h].impr += dayImpr * w; hourAgg[h].clicks += dayClicks * w;
-      hourAgg[h].cost += dayCost * w; hourAgg[h].conv += dayConv * w * convW;
-    });
 
-    cumConv += dayConv;
     daily.push({
       day: d + 1, date: dateStr(d), weekend,
       impr: dayImpr, clicks: dayClicks, cost: dayCost, conv: dayConv,
@@ -886,19 +1028,29 @@ function simulate(cfg) {
     });
   }
 
-  /* 총계 */
+  /* 제외 키워드가 실제로 막은 것 집계 (참고용) */
+  kws.forEach(k => (k.allQueries || []).forEach(q => {
+    if (!q.blockedBy) return;
+    const key = q.blockedBy.text + "||" + q.blockedBy.match;
+    const prev = negAgg.get(key) || { text: q.blockedBy.text, match: q.blockedBy.match, blocked: [] };
+    if (!prev.blocked.includes(q.q)) prev.blocked.push(q.q);
+    negAgg.set(key, prev);
+  }));
+
   const tot = daily.reduce((s, r) => ({
     impr: s.impr + r.impr, clicks: s.clicks + r.clicks, cost: s.cost + r.cost, conv: s.conv + r.conv,
     lostBudget: s.lostBudget + r.lostBudget, lostRank: s.lostRank + r.lostRank,
   }), { impr: 0, clicks: 0, cost: 0, conv: 0, lostBudget: 0, lostRank: 0 });
 
-  /* 전환 1건의 가치 — 전환 액션의 '값' 설정을 따른다 */
   const convValue = cAct.valueMode === "none" ? 0
     : cAct.valueMode === "dynamic" ? (cAct.value || cfg.biz.price) * 1.15 * prof.model.ltvMult
       : (cAct.value || cfg.biz.price) * prof.model.ltvMult;
 
   const queries = [...qAgg.values()].sort((a, b) => b.cost - a.cost);
-  const wasteCost = queries.filter(q => q.rel === "off" || q.rel === "loose").reduce((s, q) => s + q.cost, 0);
+  const placements = [...placeAgg.values()].sort((a, b) => b.cost - a.cost);
+  const wasteCost = isDisplay
+    ? placements.filter(p => p.rel === "junk" || p.rel === "loose").reduce((s, p) => s + p.cost, 0)
+    : queries.filter(q => q.rel === "off" || q.rel === "loose").reduce((s, q) => s + q.cost, 0);
   const totalEligible = tot.impr + tot.lostBudget + tot.lostRank;
   const m = {
     ...tot,
@@ -912,12 +1064,14 @@ function simulate(cfg) {
     isLostBudget: tot.lostBudget / Math.max(1, totalEligible),
     isLostRank: tot.lostRank / Math.max(1, totalEligible),
     wasteCost, wasteShare: wasteCost / Math.max(1, tot.cost), marketAvg,
-    avgQs: kws.reduce((s, k) => s + k.qs, 0) / Math.max(1, kws.length),
+    avgQs: kws.length ? kws.reduce((s, k) => s + k.qs, 0) / kws.length : 0,
+    groupCount: groups.length, negCount: cfg.negatives.length,
   };
 
   return {
-    cfg, seed, daily, keywords: kwAgg, queries, devices: devAgg, hours: hourAgg, metrics: m, kws,
-    bidCap, marketAvg, prof,
+    cfg, seed, daily, keywords: kwAgg, groups: groupAgg, queries, placements,
+    negatives: [...negAgg.values()], placeSet,
+    devices: devAgg, hours: hourAgg, metrics: m, kws, bidCap, marketAvg, prof, isDisplay,
   };
 }
 
@@ -935,8 +1089,13 @@ function dowOf(ds) { const [y, m, d] = ds.split("-").map(Number); return DOW[new
    각 진단은 근거 숫자와 조치를 함께 낸다.
    ════════════════════════════════════════════════════════ */
 function diagnose(sim) {
-  const { metrics: m, cfg, kws, queries, prof } = sim;
+  const { metrics: m, cfg, kws, queries, prof, placements, isDisplay } = sim;
   const t = cfg.biz.targets;
+  const AG = cfg.adGroups || [{ name: "광고그룹 1", keywords: cfg.keywords || [], ad: cfg.ad }];
+  const allKw = AG.flatMap(g => g.keywords || []);
+  const thinAd = AG.slice().sort((a, b) =>
+    (a.ad.headlines.length + a.ad.descriptions.length) - (b.ad.headlines.length + b.ad.descriptions.length))[0];
+  const anyExt = AG.some(g => g.ad.sitelinks.length || g.ad.callouts.length);
   const out = [];
   const add = (sev, title, why, ev, fix) => out.push({ sev, title, why, ev, fix });
 
@@ -948,7 +1107,7 @@ function diagnose(sim) {
       "일일 예산을 올리거나, 성과가 낮은 키워드를 빼서 남은 예산을 좋은 키워드에 몰아주세요.");
   }
   /* 2. 검색유형이 너무 넓다 */
-  if (m.wasteShare >= 0.22) {
+  if (!isDisplay && m.wasteShare >= 0.22) {
     const worst = queries.filter(q => q.rel === "off" || q.rel === "loose").slice(0, 3).map(q => q.q);
     add(m.wasteShare >= 0.4 ? "high" : "mid", "고객이 아닌 검색어에 돈이 새고 있습니다",
       "확장검색은 도달을 넓히지만, 우리 고객이 아닌 검색까지 끌어옵니다. 이 비용은 전환으로 이어지지 않습니다.",
@@ -956,7 +1115,7 @@ function diagnose(sim) {
       "검색어 보고서에서 무관한 검색어를 제외 키워드로 추가하고, 핵심 키워드는 구문검색 또는 일치검색으로 좁히세요.");
   }
   /* 3. 품질평가점수 */
-  if (m.avgQs <= 5.5) {
+  if (!isDisplay && m.avgQs <= 5.5) {
     const low = kws.filter(k => k.qs <= 5).map(k => k.text).slice(0, 3);
     add(m.avgQs <= 4 ? "high" : "mid", "품질평가점수가 낮아 클릭당비용이 비쌉니다",
       "품질평가점수가 낮으면 같은 순위를 얻는 데 더 많은 돈을 내야 합니다. 광고문구에 키워드가 없거나, 방문 페이지가 검색 의도와 어긋날 때 떨어집니다.",
@@ -964,10 +1123,10 @@ function diagnose(sim) {
       "제목에 키워드를 그대로 넣고, 키워드별로 광고그룹을 쪼개세요. 방문 페이지도 그 키워드를 말하는 페이지여야 합니다.");
   }
   /* 4. 광고 소재 부족 */
-  if (cfg.ad.headlines.length < 8 || cfg.ad.descriptions.length < 3) {
-    add(cfg.ad.headlines.length < 5 ? "mid" : "low", "광고 소재가 부족합니다",
+  if (thinAd && (thinAd.ad.headlines.length < 8 || thinAd.ad.descriptions.length < 3)) {
+    add(thinAd.ad.headlines.length < 5 ? "mid" : "low", "광고 소재가 부족합니다",
       "반응형 검색광고는 제목·설명 조합을 실험해 성과를 올립니다. 자산이 적으면 실험할 조합 자체가 없습니다.",
-      [["제목", cfg.ad.headlines.length + "개 (권장 8~15)"], ["설명", cfg.ad.descriptions.length + "개 (권장 4)"], ["CTR", pct(m.ctr, 2)]],
+      [["광고그룹", thinAd.name], ["제목", thinAd.ad.headlines.length + "개 (권장 8~15)"], ["설명", thinAd.ad.descriptions.length + "개 (권장 4)"], ["CTR", pct(m.ctr, 2)]],
       "제목을 최소 8개까지 채우고, 혜택·가격·신뢰·행동유도를 각각 다른 각도로 쓰세요.");
   }
   /* 5. 타겟 CPA가 비현실적 */
@@ -1021,7 +1180,7 @@ function diagnose(sim) {
       "실제로 상품을 제공할 수 있는 지역과, 사이트가 지원하는 언어로만 좁히세요.");
   }
   /* 8. 광고 확장 미사용 */
-  if (cfg.ad.sitelinks.length === 0 && cfg.ad.callouts.length === 0) {
+  if (!anyExt && !isDisplay) {
     add("low", "광고 확장을 쓰지 않아 광고가 작게 보입니다",
       "사이트링크·콜아웃은 광고 면적을 넓혀 클릭률을 올립니다. 추가 비용 없이 얻는 CTR입니다.",
       [["사이트링크", "0개"], ["콜아웃", "0개"], ["CTR", pct(m.ctr, 2)]],
@@ -1035,16 +1194,16 @@ function diagnose(sim) {
       "입찰가를 시장 평균 CPC 수준까지 올리거나, 품질평가점수를 올려 같은 입찰가로 더 높은 순위를 받으세요.");
   }
   /* 10. 키워드 구성 */
-  const broadCount = cfg.keywords.filter(k => k.match === "broad").length;
-  if (cfg.keywords.length <= 3) {
+  const broadCount = allKw.filter(k => k.match === "broad").length;
+  if (!isDisplay && allKw.length <= 3) {
     add("low", "키워드가 너무 적어 트래픽이 제한됩니다",
       "키워드가 적으면 도달할 수 있는 검색 자체가 적습니다.",
-      [["키워드 수", cfg.keywords.length + "개"], ["총 노출수", int(m.impr)]],
+      [["키워드 수", allKw.length + "개"], ["총 노출수", int(m.impr)]],
       "핵심 키워드에서 파생된 롱테일 키워드를 10~20개까지 늘리세요.");
-  } else if (broadCount === cfg.keywords.length && cfg.keywords.length > 0) {
+  } else if (!isDisplay && broadCount === allKw.length && allKw.length > 0) {
     add("mid", "모든 키워드가 확장검색입니다",
       "제어 장치 없이 확장검색만 쓰면 예산이 어디로 갈지 통제할 수 없습니다.",
-      [["확장검색", broadCount + "개 / " + cfg.keywords.length + "개"], ["무관 비용 비중", pct(m.wasteShare, 1)]],
+      [["확장검색", broadCount + "개 / " + allKw.length + "개"], ["무관 비용 비중", pct(m.wasteShare, 1)]],
       "핵심 키워드는 구문·일치검색으로 두고, 확장검색은 새 검색어 발굴용으로 소수만 쓰세요.");
   }
   /* 11. 오프타겟 키워드를 직접 넣은 경우 */
@@ -1062,6 +1221,77 @@ function diagnose(sim) {
       "스마트 입찰은 데이터를 모으는 동안 일부러 다양한 입찰을 시도합니다. 이 기간의 성과는 정상보다 낮게 나오는 것이 정상입니다.",
       [["학습 기간", BIDDING[cfg.bidding].learnDays + "일"], ["학습 기간 비용", won(learnCost)], ["입찰 전략", BIDDING[cfg.bidding].name]],
       "학습 기간에는 설정을 바꾸지 말고 기다리세요. 중간에 바꾸면 학습이 처음부터 다시 시작됩니다.");
+  }
+
+  /* 13. 제외 키워드를 전혀 쓰지 않음 */
+  if (!isDisplay && cfg.negatives.length === 0 && m.wasteShare >= 0.12) {
+    const worst = queries.filter(q => q.rel === "off" || q.rel === "loose").slice(0, 4).map(q => q.q);
+    add(m.wasteShare >= 0.3 ? "high" : "mid", "제외 키워드를 한 개도 등록하지 않았습니다",
+      "검색어 보고서에서 무관한 검색어를 찾아 제외 키워드로 등록하는 것이 검색 광고 운영의 핵심 반복 작업입니다. 지금은 발견만 하고 막지 않은 상태입니다.",
+      [["제외 키워드", "0개"], ["새는 비용", won(m.wasteCost)], ["막을 후보", worst.join(", ") || "-"]],
+      "검색어 화면에서 무관한 검색어 옆의 '제외 키워드로 추가'를 누른 뒤 다시 게재해 보세요.");
+  }
+  /* 14. 제외 키워드가 너무 세서 자기 키워드까지 막음 */
+  const selfBlocked = kws.filter(k => k.selfBlocked);
+  if (selfBlocked.length) {
+    add("high", "제외 키워드가 내 키워드까지 막고 있습니다",
+      "제외 키워드의 범위가 너무 넓어 정작 노려야 할 검색어까지 차단했습니다. 노출이 통째로 사라집니다.",
+      [["막힌 키워드", selfBlocked.map(k => k.text).join(", ")], ["제외 키워드 수", cfg.negatives.length + "개"]],
+      "제외 키워드를 구문검색이나 일치검색으로 좁히세요. 확장 제외는 단어가 모두 들어가기만 하면 막습니다.");
+  } else {
+    const overBlocked = kws.filter(k => k.blockedShare > 0.55 && !k.selfBlocked);
+    if (overBlocked.length) {
+      add("mid", "제외 키워드가 유효한 검색어까지 많이 막고 있습니다",
+        "관련 있는 검색어까지 함께 걸러져 도달할 수 있는 트래픽이 줄었습니다.",
+        [["영향받은 키워드", overBlocked.map(k => k.text).join(", ")], ["차단된 검색어 비중", pct(overBlocked[0].blockedShare, 0)]],
+        "제외 키워드를 더 구체적으로 바꾸세요.");
+    }
+  }
+  /* 15. 광고그룹 분리 */
+  if (!isDisplay && AG.length === 1 && allKw.length >= 6) {
+    add("mid", "키워드를 광고그룹 하나에 모두 넣었습니다",
+      "광고문구는 하나인데 키워드 주제가 여러 개면, 어떤 키워드에도 딱 맞지 않는 광고가 됩니다. 품질평가점수가 떨어지고 클릭당비용이 올라갑니다.",
+      [["광고그룹", "1개"], ["키워드", allKw.length + "개"], ["평균 품질평가점수", m.avgQs.toFixed(1)]],
+      "주제가 비슷한 키워드끼리 3~5개씩 묶어 광고그룹을 나누고, 그룹마다 그 주제를 그대로 말하는 광고를 쓰세요.");
+  }
+  /* 16. 입찰 조정 미사용 — 기기별 성과 격차가 큰데 조정이 없을 때 */
+  if (!isDisplay) {
+    const adjUsed = DEVICES.some(dv => (cfg.bidAdj.device[dv] || 0) !== 0)
+      || HOUR_BLOCKS.some(b => (cfg.bidAdj.block[b.key] || 0) !== 0) || cfg.bidAdj.weekend !== 0;
+    const dv = Object.entries(sim.devices).map(([k, v]) => ({ k, cpa: v.conv > 0.5 ? v.cost / v.conv : Infinity, cost: v.cost }))
+      .filter(x => x.cost > 0 && x.cpa !== Infinity).sort((a, b) => a.cpa - b.cpa);
+    if (!adjUsed && dv.length >= 2 && dv[dv.length - 1].cpa > dv[0].cpa * 1.6) {
+      add("mid", "기기별 성과 차이가 큰데 입찰 조정을 쓰지 않았습니다",
+        "같은 입찰가로 모든 기기에 노출하고 있습니다. 잘 되는 기기에 더 쓰고 안 되는 기기에서 줄이면 같은 예산으로 더 많은 전환을 얻습니다.",
+        [["가장 좋은 기기", DEV_LABEL[dv[0].k] + " CPA " + won(dv[0].cpa)],
+         ["가장 나쁜 기기", DEV_LABEL[dv[dv.length - 1].k] + " CPA " + won(dv[dv.length - 1].cpa)],
+         ["입찰 조정", "미사용"]],
+        DEV_LABEL[dv[0].k] + " 입찰을 올리고 " + DEV_LABEL[dv[dv.length - 1].k] + " 입찰을 낮춰 보세요.");
+    }
+  }
+  /* 17. 디스플레이 전용 */
+  if (isDisplay) {
+    const junk = placements.filter(p => p.rel === "junk");
+    const junkCost = junk.reduce((s, p) => s + p.cost, 0);
+    if (junkCost / Math.max(1, m.cost) >= 0.12) {
+      add(junkCost / Math.max(1, m.cost) >= 0.3 ? "high" : "mid", "무관한 앱·사이트에 예산이 새고 있습니다",
+        "디스플레이는 노출 지면을 시스템이 고릅니다. 모바일 게임 앱 같은 곳에서는 실수 클릭이 많아 클릭률은 오히려 높지만 전환은 거의 없습니다.",
+        [["무관 게재위치 비용", won(junkCost)], ["전체 대비", pct(junkCost / Math.max(1, m.cost), 1)],
+         ["예시", junk.slice(0, 3).map(p => p.name).join(", ")]],
+        "게재위치 보고서에서 이런 지면을 제외하세요. 검색의 제외 키워드와 같은 작업입니다.");
+    }
+    if ((cfg.display.frequencyCap || 3) >= 6) {
+      add("mid", "노출 빈도가 너무 높습니다",
+        "같은 사람에게 반복 노출하면 반응이 급격히 떨어지고 예산만 소모합니다.",
+        [["빈도 한도", cfg.display.frequencyCap + "회/일"], ["CTR", pct(m.ctr, 3)]],
+        "빈도 한도를 2~3회로 낮추고 남는 예산을 새로운 사용자에게 쓰세요.");
+    }
+    if (cfg.display.targeting === "audience" && m.wasteShare >= 0.4) {
+      add("mid", "타겟팅이 너무 넓습니다",
+        "잠재고객 타겟팅은 도달이 가장 넓은 대신 관련성이 가장 낮습니다.",
+        [["타겟팅", DISPLAY_TARGETING[cfg.display.targeting].name], ["무관·느슨한 비용", pct(m.wasteShare, 1)]],
+        "주제 타겟팅으로 좁히거나, 성과가 확인된 게재위치만 직접 지정하세요.");
+    }
   }
 
   /* 목표 달성 채점 */
@@ -1133,7 +1363,8 @@ const NAV = [
   { id: "business", label: "비즈니스 정보" },
   { group: "목표", items: [{ id: "conversions", label: "전환" }] },
   { group: "통계 및 보고서", items: [{ id: "reports", label: "보고서 에디터" }, { id: "diagnostics", label: "진단" }] },
-  { group: "캠페인", items: [{ id: "campaigns", label: "캠페인" }, { id: "keywords", label: "키워드" }, { id: "searchterms", label: "검색어" }, { id: "ads", label: "광고" }] },
+  { group: "캠페인", items: [{ id: "campaigns", label: "캠페인" }, { id: "adgroups", label: "광고그룹" }, { id: "keywords", label: "키워드" }, { id: "searchterms", label: "검색어" }, { id: "negatives", label: "제외 키워드" }, { id: "placements", label: "게재위치" }, { id: "ads", label: "광고" }] },
+  { id: "compare", label: "캠페인 비교" },
   { id: "changes", label: "변경 내역" },
 ];
 function renderNav() {
@@ -1179,6 +1410,7 @@ function render() {
   const page = ({
     overview: pageOverview, business: pageBusiness, conversions: pageConversions, campaigns: pageCampaigns,
     keywords: () => pageTable("keywords"), searchterms: () => pageTable("searchterms"), ads: pageAds,
+    adgroups: pageAdGroups, negatives: pageNegatives, placements: pagePlacements, compare: pageCompare,
     reports: pageReports, diagnostics: pageDiagnostics, changes: pageChanges,
   })[state.view] || pageOverview;
   m.append(page());
@@ -1477,11 +1709,12 @@ function pageCampaigns() {
     ])]));
     return w;
   }
-  const t = tbl(["캠페인", "상태", "예산", "노출수", "클릭수", "CTR", "평균 CPC", "비용", "전환수", "CPA", "점수"]);
+  const t = tbl(["캠페인", "유형", "상태", "예산", "노출수", "클릭수", "CTR", "평균 CPC", "비용", "전환수", "CPA", "점수"]);
   state.campaigns.forEach((c, i) => {
     const m = c.sim.metrics;
     t.body.append(el("tr", { style: "cursor:pointer", onclick: () => { state.current = i; go("diagnostics"); } }, [
       td(el("button", { class: "btn btn-text btn-sm", style: "padding:0", text: c.cfg.name })),
+      td(CAMPAIGN_TYPES[c.cfg.type || "search"].name),
       td(el("span", { class: "tag tag-good", text: "● 게재 중" })),
       td(won(c.cfg.budget) + "/일"), td(int(m.impr)), td(int(m.clicks)), td(pct(m.ctr)),
       td(won(m.cpc)), td(won(m.cost)), td(m.conv.toFixed(1)),
@@ -1592,7 +1825,9 @@ function emptyPage(w, t, d) {
   return w;
 }
 function campaignTabs(active) {
-  const items = [["diagnostics", "진단"], ["keywords", "키워드"], ["searchterms", "검색어"], ["ads", "광고"], ["reports", "보고서"]];
+  const items = cur() && cur().sim.isDisplay
+    ? [["diagnostics", "진단"], ["placements", "게재위치"], ["ads", "광고"], ["reports", "보고서"]]
+    : [["diagnostics", "진단"], ["adgroups", "광고그룹"], ["keywords", "키워드"], ["searchterms", "검색어"], ["negatives", "제외 키워드"], ["ads", "광고"], ["reports", "보고서"]];
   const t = el("div", { class: "tabs", role: "tablist" });
   items.forEach(([id, label]) => t.append(el("button", {
     class: "tab", role: "tab", text: label,
@@ -1611,12 +1846,13 @@ function pageTable(kind) {
 
   if (kind === "keywords") {
     w.append(el("div", { class: "banner banner-info", html: ICON.info + "<div><b>품질평가점수</b>는 광고 관련성 · 예상 CTR · 방문 페이지 만족도 세 가지로 매겨집니다. 점수가 낮으면 같은 순위를 얻는 데 더 비싼 값을 치릅니다.</div>" }));
-    const t = tbl(["키워드", "검색유형", "품질평가점수", "광고 관련성", "예상 CTR", "방문 페이지", "노출수", "클릭수", "CTR", "평균 CPC", "비용", "전환수"]);
+    const t = tbl(["키워드", "광고그룹", "검색유형", "품질평가점수", "광고 관련성", "예상 CTR", "방문 페이지", "노출수", "클릭수", "CTR", "평균 CPC", "비용", "전환수"]);
     c.sim.keywords.slice().sort((a, b) => b.cost - a.cost).forEach(a => {
       const k = a.kw;
       const qsColor = k.qs >= 8 ? "tag-good" : k.qs >= 5 ? "tag-warn" : "tag-crit";
       t.body.append(el("tr", {}, [
         td(el("span", {}, [document.createTextNode(MATCH[k.match].fmt(k.text)), k.offTarget ? el("span", { class: "tag tag-crit", style: "margin-left:8px", text: "고객 아님" }) : k.isBrand ? el("span", { class: "tag tag-good", style: "margin-left:8px", text: "브랜드" }) : null])),
+        td(k.group || "—"),
         td(MATCH[k.match].name),
         td(el("span", { class: "qs tag " + qsColor, text: String(k.qs) })),
         td(k.qsParts.relevance), td(k.qsParts.ctr), td(k.qsParts.landing),
@@ -1630,20 +1866,40 @@ function pageTable(kind) {
     const m = c.sim.metrics;
     w.append(el("div", { class: "banner banner-warn", html: ICON.warn + "<div>전체 비용의 <b>" + pct(m.wasteShare, 1) + "</b>(" + won(m.wasteCost) + ")이 <b>느슨하거나 무관한 검색어</b>에 쓰였습니다. 아래에서 제외할 검색어를 찾아보세요.</div>" }));
     w.append(wasteChartCard(c));
-    const t = tbl(["검색어", "관련도", "일치 키워드", "검색유형", "노출수", "클릭수", "비용", "전환수", "전환당비용"]);
+    const pend = state.pendingNegatives = state.pendingNegatives || [];
+    const t = tbl(["검색어", "관련도", "일치 키워드", "검색유형", "노출수", "클릭수", "비용", "전환수", "전환당비용", "제외 키워드로"]);
     c.sim.queries.slice(0, 60).forEach(q => {
       const relTag = q.rel === "exact" ? ["tag-good", "정확 일치"] : q.rel === "close" ? ["tag-mute", "관련"] : q.rel === "loose" ? ["tag-warn", "느슨함"] : ["tag-crit", "무관"];
+      const already = (c.cfg.negatives || []).some(n => n.text === q.q);
+      const queued = pend.some(n => n.text === q.q);
       t.body.append(el("tr", {}, [
         td(q.q), td(el("span", { class: "tag " + relTag[0], text: relTag[1] })),
         td(q.kw), td(MATCH[q.match].name),
         td(int(q.impr)), td(int(q.clicks)), td(won(q.cost)), td(q.conv.toFixed(1)),
         td(q.conv >= 0.5 ? won(q.cost / q.conv) : "—"),
+        td(already ? el("span", { class: "tag tag-mute", text: "제외됨" })
+          : el("button", {
+            class: "btn btn-text btn-sm", style: "padding:2px 10px",
+            text: queued ? "대기 중" : "＋ 제외",
+            disabled: queued || undefined,
+            onclick: () => { pend.push({ text: q.q, match: "phrase" }); render(); },
+          })),
       ]));
     });
     w.append(el("div", { class: "card" }, [
       el("div", { class: "card-head" }, [el("h3", { text: "검색어 보고서" }), el("span", { class: "sub", text: "비용 상위 60개" })]),
       el("div", { class: "tbl-wrap" }, [t.table]),
     ]));
+    if (pend.length) {
+      w.append(el("div", { class: "card" }, [
+        el("div", { class: "card-head" }, [el("h3", { text: "제외 대기 " + pend.length + "개" }),
+          el("span", { class: "sub", text: pend.map(n => n.text).join(", ") })]),
+        el("div", { class: "card-body", style: "display:flex;gap:12px;flex-wrap:wrap" }, [
+          el("button", { class: "btn btn-primary", text: "제외 키워드 적용해 다시 게재", onclick: () => go("negatives") }),
+          el("button", { class: "btn btn-text", text: "비우기", onclick: () => { state.pendingNegatives = []; render(); } }),
+        ]),
+      ]));
+    }
   }
   return w;
 }
@@ -1658,7 +1914,7 @@ function qsExplainCard(c) {
       el("p", { style: "margin:0;color:var(--ink-2)", text: "가장 낮은 키워드 “" + worst.text + "” (" + worst.qs + "점) 기준입니다." }),
       el("dl", { class: "kv" }, [
         el("dt", { text: "광고 관련성" }), el("dd", { text: worst.qsParts.relevance + " — 이 키워드가 광고 제목·설명에 실제로 등장하는가" }),
-        el("dt", { text: "예상 CTR" }), el("dd", { text: worst.qsParts.ctr + " — 제목 " + c.cfg.ad.headlines.length + "개, 설명 " + c.cfg.ad.descriptions.length + "개, 확장 " + (c.cfg.ad.sitelinks.length + c.cfg.ad.callouts.length) + "개" }),
+        el("dt", { text: "예상 CTR" }), el("dd", { text: (() => { const g = (c.cfg.adGroups || []).find(x => x.name === worst.group) || (c.cfg.adGroups || [])[0]; return g ? worst.qsParts.ctr + " — 제목 " + g.ad.headlines.length + "개, 설명 " + g.ad.descriptions.length + "개, 확장 " + (g.ad.sitelinks.length + g.ad.callouts.length) + "개" : worst.qsParts.ctr; })() }),
         el("dt", { text: "방문 페이지" }), el("dd", { text: worst.qsParts.landing + " — 최종 URL이 비즈니스 도메인과 " + (worst.sameDomain === 1 ? "일치" : worst.sameDomain ? "불일치" : "미설정") + ", 비즈니스 설명과의 어휘 일치도" }),
         el("dt", { text: "브랜드 적합도" }), el("dd", { text: pct(worst.brandFit, 0) + " — 비즈니스 설명·타겟 고객·업종 어휘와 겹치는 정도" }),
       ]),
@@ -1666,12 +1922,246 @@ function qsExplainCard(c) {
   ]);
 }
 
+/* ── 광고그룹 ────────────────────────────────────────── */
+function pageAdGroups() {
+  const w = el("div", { class: "grid" });
+  w.append(head("광고그룹"));
+  if (!state.campaigns.length) return emptyPage(w, "데이터가 없습니다", "캠페인을 게재하면 광고그룹 실적이 채워집니다.");
+  const c = cur();
+  w.append(campaignTabs("adgroups"));
+  if (c.sim.isDisplay) {
+    w.append(el("div", { class: "banner banner-info", html: ICON.info + "<div>디스플레이 캠페인에는 키워드 기반 광고그룹이 없습니다. <b>게재위치</b> 탭을 보세요.</div>" }));
+    return w;
+  }
+  w.append(el("div", { class: "banner banner-info", html: ICON.info + "<div>광고그룹은 <b>비슷한 키워드 + 그 키워드를 말하는 광고</b>의 묶음입니다. 그룹을 잘게 나눌수록 광고와 키워드가 가까워져 품질평가점수가 올라가고 클릭당비용이 내려갑니다.</div>" }));
+  const t = tbl(["광고그룹", "키워드 수", "평균 품질평가점수", "노출수", "클릭수", "CTR", "평균 CPC", "비용", convName(c.cfg.biz), "CPA"]);
+  c.sim.groups.forEach(g => {
+    const qsTag = g.avgQs >= 8 ? "tag-good" : g.avgQs >= 5 ? "tag-warn" : "tag-crit";
+    t.body.append(el("tr", {}, [
+      td(g.name), td(String(g.keywords)),
+      td(el("span", { class: "qs tag " + qsTag, text: g.avgQs.toFixed(1) })),
+      td(int(g.impr)), td(int(g.clicks)), td(pct(g.clicks / Math.max(1, g.impr))),
+      td(won(g.cost / Math.max(1, g.clicks))), td(won(g.cost)), td(g.conv.toFixed(1)),
+      td(g.conv >= 0.5 ? won(g.cost / g.conv) : "—"),
+    ]));
+  });
+  w.append(el("div", { class: "card" }, [el("div", { class: "tbl-wrap" }, [t.table])]));
+  if (c.sim.groups.length === 1) {
+    w.append(el("div", { class: "banner banner-warn", html: ICON.warn + "<div>광고그룹이 하나입니다. 키워드를 주제별로 나눠 다시 게재하면 품질평가점수가 어떻게 달라지는지 비교해 보세요.</div>" }));
+  }
+  return w;
+}
+
+/* ── 제외 키워드 ─────────────────────────────────────── */
+function pageNegatives() {
+  const w = el("div", { class: "grid" });
+  w.append(head("제외 키워드"));
+  if (!state.campaigns.length) return emptyPage(w, "데이터가 없습니다", "캠페인을 게재한 뒤 검색어 보고서에서 제외할 표현을 찾습니다.");
+  const c = cur();
+  w.append(campaignTabs("negatives"));
+  const negs = c.cfg.negatives || [];
+
+  w.append(el("div", { class: "banner banner-info", html: ICON.info + "<div>검색어 보고서에서 무관한 검색어를 찾아 제외 키워드로 등록하고, 다시 게재해 낭비가 줄었는지 확인합니다. 이 <b>발견 → 제외 → 재게재</b> 루프가 검색 광고 운영의 핵심입니다.</div>" }));
+
+  if (!negs.length) {
+    w.append(el("div", { class: "card" }, [el("div", { class: "empty" }, [
+      el("h3", { text: "등록된 제외 키워드가 없습니다" }),
+      el("p", { text: "검색어 화면에서 무관한 검색어 옆의 ‘제외’ 버튼을 누르면 여기에 쌓입니다." }),
+      el("button", { class: "btn btn-primary", text: "검색어 보고서 보기", onclick: () => go("searchterms") }),
+    ])]));
+  } else {
+    const t = tbl(["제외 키워드", "유형", "실제로 막은 검색어"]);
+    negs.forEach(n => {
+      const rec = (c.sim.negatives || []).find(x => x.text === n.text && x.match === n.match);
+      t.body.append(el("tr", {}, [
+        td(MATCH[n.match].fmt(n.text)), td(MATCH[n.match].name),
+        td(rec && rec.blocked.length ? rec.blocked.slice(0, 5).join(", ") + (rec.blocked.length > 5 ? " 외 " + (rec.blocked.length - 5) + "개" : "") : "막은 검색어 없음"),
+      ]));
+    });
+    w.append(el("div", { class: "card" }, [
+      el("div", { class: "card-head" }, [el("h3", { text: negs.length + "개 등록됨" })]),
+      el("div", { class: "tbl-wrap" }, [t.table]),
+    ]));
+  }
+
+  /* 보류 중인 제외 키워드 — 재게재해야 반영된다 */
+  const pend = state.pendingNegatives || [];
+  if (pend.length) {
+    const chips = el("div", { class: "chips" });
+    pend.forEach((n, i) => chips.append(el("span", { class: "chip" }, [
+      document.createTextNode(MATCH[n.match].fmt(n.text)),
+      el("button", { "aria-label": "빼기", html: ICON.x, onclick: () => { pend.splice(i, 1); render(); } }),
+    ])));
+    w.append(el("div", { class: "card" }, [
+      el("div", { class: "card-head" }, [el("h3", { text: "추가 대기 " + pend.length + "개" }),
+        el("span", { class: "sub", text: "재게재해야 반영됩니다" })]),
+      el("div", { class: "card-body grid", style: "gap:14px" }, [chips,
+        el("div", { style: "display:flex;gap:12px;flex-wrap:wrap" }, [
+          el("button", {
+            class: "btn btn-primary", text: "제외 키워드 적용해 다시 게재", onclick: () => {
+              const cfg = JSON.parse(JSON.stringify(normCfg(c.cfg)));
+              cfg.negatives = (cfg.negatives || []).concat(pend);
+              cfg.name = c.cfg.name.replace(/ \(제외 \d+차\)$/, "") + " (제외 " + ((c.cfg.negatives || []).length ? "2" : "1") + "차)";
+              cfg.biz = state.biz;
+              state.campaigns.push(wrapCampaign(cfg));
+              state.current = state.campaigns.length - 1;
+              state.pendingNegatives = [];
+              save(); go("compare");
+            }
+          }),
+          el("button", { class: "btn btn-text", text: "모두 비우기", onclick: () => { state.pendingNegatives = []; render(); } }),
+        ])]),
+    ]));
+  }
+  return w;
+}
+
+/* ── 게재위치 (디스플레이) ───────────────────────────── */
+function pagePlacements() {
+  const w = el("div", { class: "grid" });
+  w.append(head("게재위치"));
+  if (!state.campaigns.length) return emptyPage(w, "데이터가 없습니다", "디스플레이 캠페인을 게재하면 지면별 실적이 나옵니다.");
+  const c = cur();
+  w.append(campaignTabs("placements"));
+  if (!c.sim.isDisplay) {
+    w.append(el("div", { class: "banner banner-info", html: ICON.info + "<div>이 캠페인은 검색 캠페인입니다. 게재위치 보고서는 디스플레이 캠페인에서만 나옵니다.</div>" }));
+    return w;
+  }
+  const m = c.sim.metrics;
+  w.append(el("div", { class: "banner banner-warn", html: ICON.warn + "<div>전체 비용의 <b>" + pct(m.wasteShare, 1) + "</b>(" + won(m.wasteCost) + ")이 <b>느슨하거나 무관한 지면</b>에 쓰였습니다. 무관한 앱은 <b>클릭률이 오히려 높습니다</b> — 실수 클릭이기 때문입니다.</div>" }));
+
+  const pend = state.pendingPlacements || [];
+  const t = tbl(["게재위치", "관련도", "노출수", "클릭수", "CTR", "비용", convName(c.cfg.biz), "제외"]);
+  c.sim.placements.forEach(p => {
+    const tag = p.rel === "relevant" ? ["tag-good", "관련"] : p.rel === "loose" ? ["tag-warn", "느슨함"] : ["tag-crit", "무관"];
+    const already = (c.cfg.display.excludedPlacements || []).includes(p.name);
+    const queued = pend.includes(p.name);
+    t.body.append(el("tr", {}, [
+      td(p.name), td(el("span", { class: "tag " + tag[0], text: tag[1] })),
+      td(int(p.impr)), td(int(p.clicks)), td(pct(p.clicks / Math.max(1, p.impr), 3)),
+      td(won(p.cost)), td(p.conv.toFixed(1)),
+      td(already ? el("span", { class: "tag tag-mute", text: "제외됨" })
+        : el("button", {
+          class: "btn btn-text btn-sm", style: "padding:2px 10px",
+          text: queued ? "대기 중" : "제외",
+          disabled: queued || undefined,
+          onclick: () => { (state.pendingPlacements = state.pendingPlacements || []).push(p.name); render(); },
+        })),
+    ]));
+  });
+  w.append(el("div", { class: "card" }, [
+    el("div", { class: "card-head" }, [el("h3", { text: "게재위치 보고서" }),
+      el("span", { class: "sub", text: DISPLAY_TARGETING[c.cfg.display.targeting].name + " · 빈도 " + c.cfg.display.frequencyCap + "회/일" })]),
+    el("div", { class: "tbl-wrap" }, [t.table]),
+  ]));
+
+  if (pend.length) {
+    w.append(el("div", { class: "card" }, [
+      el("div", { class: "card-head" }, [el("h3", { text: "제외 대기 " + pend.length + "곳" })]),
+      el("div", { class: "card-body", style: "display:flex;gap:12px;flex-wrap:wrap;align-items:center" }, [
+        el("span", { class: "hint", text: pend.join(", ") }),
+        el("button", {
+          class: "btn btn-primary", text: "제외하고 다시 게재", onclick: () => {
+            const cfg = JSON.parse(JSON.stringify(normCfg(c.cfg)));
+            cfg.display.excludedPlacements = (cfg.display.excludedPlacements || []).concat(pend);
+            cfg.name = c.cfg.name.replace(/ \(제외 \d+차\)$/, "") + " (제외 1차)";
+            cfg.biz = state.biz;
+            state.campaigns.push(wrapCampaign(cfg));
+            state.current = state.campaigns.length - 1;
+            state.pendingPlacements = [];
+            save(); go("compare");
+          }
+        }),
+        el("button", { class: "btn btn-text", text: "비우기", onclick: () => { state.pendingPlacements = []; render(); } }),
+      ]),
+    ]));
+  }
+  return w;
+}
+
+/* ── 캠페인 비교 ─────────────────────────────────────── */
+function pageCompare() {
+  const w = el("div", { class: "grid" });
+  w.append(head("캠페인 비교"));
+  if (state.campaigns.length < 2) {
+    w.append(el("div", { class: "card" }, [el("div", { class: "empty" }, [
+      el("h3", { text: "비교하려면 캠페인이 2개 이상 필요합니다" }),
+      el("p", { text: "설정을 하나만 바꿔 다시 게재하면, 그 변화가 성과에 어떤 영향을 줬는지 나란히 볼 수 있습니다." }),
+      state.campaigns.length ? el("button", { class: "btn btn-primary", text: "설정 바꿔서 다시 게재", onclick: () => startWizard(cur().cfg) }) : null,
+    ])]));
+    return w;
+  }
+  const base = state.campaigns[0];
+  const cn = convName(base.cfg.biz);
+  const rows = [
+    ["점수", c => c.diag.score + "점", (a, b) => b.diag.score - a.diag.score],
+    ["노출수", c => int(c.sim.metrics.impr), (a, b) => b.sim.metrics.impr - a.sim.metrics.impr],
+    ["클릭수", c => int(c.sim.metrics.clicks), (a, b) => b.sim.metrics.clicks - a.sim.metrics.clicks],
+    ["CTR", c => pct(c.sim.metrics.ctr), (a, b) => b.sim.metrics.ctr - a.sim.metrics.ctr],
+    ["평균 CPC", c => won(c.sim.metrics.cpc), (a, b) => a.sim.metrics.cpc - b.sim.metrics.cpc],
+    ["비용", c => won(c.sim.metrics.cost), null],
+    [cn, c => c.sim.metrics.conv.toFixed(1) + "건", (a, b) => b.sim.metrics.conv - a.sim.metrics.conv],
+    ["전환당비용", c => c.sim.metrics.cpa === Infinity ? "—" : won(c.sim.metrics.cpa), (a, b) => a.sim.metrics.cpa - b.sim.metrics.cpa],
+    ["무관 비용 비중", c => pct(c.sim.metrics.wasteShare, 1), (a, b) => a.sim.metrics.wasteShare - b.sim.metrics.wasteShare],
+    ["평균 품질평가점수", c => c.sim.metrics.avgQs ? c.sim.metrics.avgQs.toFixed(1) : "—", (a, b) => b.sim.metrics.avgQs - a.sim.metrics.avgQs],
+    ["광고그룹", c => (c.sim.groups || []).length + "개", null],
+    ["제외 키워드", c => (c.cfg.negatives || []).length + "개", null],
+  ];
+  const t = tbl(["지표", ...state.campaigns.map(c => c.cfg.name)]);
+  rows.forEach(([label, get, better]) => {
+    const cells = state.campaigns.map(c => get(c));
+    let bestIdx = -1;
+    if (better) {
+      let best = state.campaigns[0];
+      state.campaigns.forEach(c => { if (better(best, c) > 0) best = c; });
+      bestIdx = state.campaigns.indexOf(best);
+    }
+    t.body.append(el("tr", {}, [td(label), ...cells.map((v, i) =>
+      td(el("span", {}, [document.createTextNode(v),
+        i === bestIdx ? el("span", { class: "tag tag-good", style: "margin-left:8px", text: "우수" }) : null])))]));
+  });
+  w.append(el("div", { class: "card" }, [
+    el("div", { class: "card-head" }, [el("h3", { text: "나란히 보기" }), el("span", { class: "sub", text: "무엇을 바꿨을 때 무엇이 달라졌는지 확인하세요" })]),
+    el("div", { class: "tbl-wrap" }, [t.table]),
+  ]));
+
+  /* 설정 차이 */
+  const diffRows = [];
+  const conf = c => ({
+    "유형": CAMPAIGN_TYPES[c.cfg.type || "search"].name,
+    "일일 예산": won(c.cfg.budget),
+    "입찰 전략": BIDDING[c.cfg.bidding].name,
+    "위치": GEOS[c.cfg.geo].name,
+    "광고그룹 수": String((c.cfg.adGroups || []).length),
+    "키워드 수": String((c.cfg.adGroups || []).flatMap(g => g.keywords || []).length),
+    "제외 키워드 수": String((c.cfg.negatives || []).length),
+    "전환 추적": c.cfg.conversionTracking ? "사용" : "사용 안 함",
+  });
+  const confs = state.campaigns.map(conf);
+  Object.keys(confs[0]).forEach(k => {
+    const vals = confs.map(x => x[k]);
+    if (new Set(vals).size > 1) diffRows.push([k, ...vals]);
+  });
+  if (diffRows.length) {
+    const dt = tbl(["설정", ...state.campaigns.map(c => c.cfg.name)]);
+    diffRows.forEach(r => dt.body.append(el("tr", {}, r.map(v => td(v)))));
+    w.append(el("div", { class: "card" }, [
+      el("div", { class: "card-head" }, [el("h3", { text: "달라진 설정" }), el("span", { class: "sub", text: diffRows.length + "개 항목" })]),
+      el("div", { class: "tbl-wrap" }, [dt.table]),
+    ]));
+  }
+  return w;
+}
+
 /* ── 광고 탭 ─────────────────────────────────────────── */
 function pageAds() {
   const w = el("div", { class: "grid" });
   w.append(head("광고"));
   if (!state.campaigns.length) return emptyPage(w, "광고가 없습니다", "캠페인을 게재하면 광고 미리보기와 실적이 나옵니다.");
-  const c = cur(); const ad = c.cfg.ad; const m = c.sim.metrics;
+  const c = cur(); const m = c.sim.metrics;
+  const groups = c.cfg.adGroups || [{ name: "광고그룹 1", ad: c.cfg.ad }];
+  const gi = clamp(state.adTab || 0, 0, groups.length - 1);
+  const ad = groups[gi].ad;
   w.append(campaignTabs("ads"));
   const dom = (ad.finalUrl.match(/https?:\/\/([^/]+)/) || [, ""])[1];
   w.append(el("div", { class: "card" }, [
@@ -1704,7 +2194,8 @@ function pageChanges() {
   if (state.biz) rows.push(["설정", "비즈니스 정보", state.biz.name + " · " + INDUSTRIES[state.biz.industry].name + " · " + MODELS[state.biz.model].name]);
   state.campaigns.forEach((c, i) => {
     rows.push(["게재 " + (i + 1), "캠페인 생성", c.cfg.name + " · 목표 " + GOALS[c.cfg.goal].name + " · " + BIDDING[c.cfg.bidding].name]);
-    rows.push(["게재 " + (i + 1), "키워드", c.cfg.keywords.map(k => MATCH[k.match].fmt(k.text)).join(", ")]);
+    (c.cfg.adGroups || []).forEach(g => rows.push(["게재 " + (i + 1), "광고그룹 " + g.name, (g.keywords || []).map(k => MATCH[k.match].fmt(k.text)).join(", ") || "—"]));
+    if ((c.cfg.negatives || []).length) rows.push(["게재 " + (i + 1), "제외 키워드", c.cfg.negatives.map(k => MATCH[k.match].fmt(k.text)).join(", ")]);
     rows.push(["게재 " + (i + 1), "예산", won(c.cfg.budget) + "/일 · " + c.cfg.biz.period + "일"]);
   });
   if (!rows.length) rows.push(["—", "기록 없음", "아직 변경 내역이 없습니다."]);
@@ -1969,17 +2460,17 @@ function buildReports(c) {
     },
     keywords: {
       name: "키워드 실적", file: "keywords.csv",
-      head: ["키워드", "검색유형", "품질평가점수", "광고 관련성", "예상 CTR", "방문 페이지", "노출수", "클릭수", "CTR", "평균 CPC", "비용", cname, "고객 아님"],
-      rows: sim.keywords.slice().sort((a, b) => b.cost - a.cost).map(a => [a.kw.text, MATCH[a.kw.match].name, a.kw.qs,
+      head: ["키워드", "광고그룹", "검색유형", "품질평가점수", "광고 관련성", "예상 CTR", "방문 페이지", "노출수", "클릭수", "CTR", "평균 CPC", "비용", cname, "고객 아님"],
+      rows: sim.keywords.slice().sort((a, b) => b.cost - a.cost).map(a => [a.kw.text, a.group || "", MATCH[a.kw.match].name, a.kw.qs,
         a.kw.qsParts.relevance, a.kw.qsParts.ctr, a.kw.qsParts.landing,
         Math.round(a.impr), Math.round(a.clicks), (a.clicks / Math.max(1, a.impr) * 100).toFixed(2) + "%",
         Math.round(a.cost / Math.max(1, a.clicks)), Math.round(a.cost), a.conv.toFixed(2), a.kw.offTarget ? "Y" : ""]),
     },
     queries: {
       name: "검색어 보고서", file: "search_terms.csv",
-      head: ["검색어", "관련도", "일치 키워드", "검색유형", "노출수", "클릭수", "CTR", "비용", cname, "전환당비용"],
+      head: ["검색어", "관련도", "일치 키워드", "광고그룹", "검색유형", "노출수", "클릭수", "CTR", "비용", cname, "전환당비용"],
       rows: sim.queries.map(q => [q.q,
-        ({ exact: "정확 일치", close: "관련", loose: "느슨함", off: "무관" })[q.rel], q.kw, MATCH[q.match].name,
+        ({ exact: "정확 일치", close: "관련", loose: "느슨함", off: "무관" })[q.rel], q.kw, q.group || "", MATCH[q.match].name,
         Math.round(q.impr), Math.round(q.clicks), (q.clicks / Math.max(1, q.impr) * 100).toFixed(2) + "%",
         Math.round(q.cost), q.conv.toFixed(2), q.conv >= 0.05 ? Math.round(q.cost / q.conv) : ""]),
     },
@@ -1992,6 +2483,21 @@ function buildReports(c) {
         ...sim.hours.map((v, h) => ["시간대", String(h).padStart(2, "0") + ":00",
           Math.round(v.impr), Math.round(v.clicks), (v.clicks / Math.max(1, v.impr) * 100).toFixed(2) + "%", Math.round(v.cost), v.conv.toFixed(2)]),
       ],
+    },
+    adgroups: {
+      name: "광고그룹 실적", file: "ad_groups.csv",
+      head: ["광고그룹", "키워드 수", "평균 품질평가점수", "노출수", "클릭수", "CTR", "평균 CPC", "비용", cname],
+      rows: sim.groups.map(g => [g.name, g.keywords, g.avgQs.toFixed(1),
+        Math.round(g.impr), Math.round(g.clicks), (g.clicks / Math.max(1, g.impr) * 100).toFixed(2) + "%",
+        Math.round(g.cost / Math.max(1, g.clicks)), Math.round(g.cost), g.conv.toFixed(2)]),
+    },
+    placements: {
+      name: "게재위치 보고서", file: "placements.csv",
+      head: ["게재위치", "관련도", "노출수", "클릭수", "CTR", "비용", cname],
+      rows: (sim.placements || []).map(x => [x.name,
+        ({ relevant: "관련", loose: "느슨함", junk: "무관" })[x.rel],
+        Math.round(x.impr), Math.round(x.clicks), (x.clicks / Math.max(1, x.impr) * 100).toFixed(3) + "%",
+        Math.round(x.cost), x.conv.toFixed(2)]),
     },
     diagnosis: {
       name: "진단 리포트", file: "diagnosis.csv",
@@ -2058,28 +2564,35 @@ function csvRows(r) {
 /* ════════════════════════════════════════════════════════
    캠페인 만들기 마법사
    ════════════════════════════════════════════════════════ */
+function blankAd(biz, brandWord) {
+  return { finalUrl: biz.url, path1: "", path2: "", headlines: [brandWord].filter(Boolean), descriptions: [], sitelinks: [], callouts: [] };
+}
 function newDraft(from) {
   const b = state.biz;
-  const brandWord = (b.name || "").split(/\s+/)[0] || "브랜드";
-  if (from) return JSON.parse(JSON.stringify({ ...from, biz: b, name: from.name + " (재게재)" }));
+  const brandWord = (b.name || "").split(/\s+/)[0] || "";
+  if (from) {
+    const c = JSON.parse(JSON.stringify(normCfg(from)));
+    c.biz = b; c.name = from.name + " (재게재)";
+    return c;
+  }
   const goal0 = b.model === "lead" ? "leads" : "sales";
   return {
     name: "검색 캠페인 " + (state.campaigns.length + 1),
-    goal: goal0,
+    type: "search", goal: goal0,
     bidding: "max_clicks", budget: 30000, targetCpa: recommendedCpa(b, goal0).mid, maxCpc: 1200,
     geo: "kr", lang: "ko", displayExpansion: false, conversionTracking: true,
-    keywords: [], adGroup: "광고그룹 1",
-    ad: {
-      finalUrl: b.url, path1: "", path2: "",
-      headlines: [brandWord, "", ""].filter(Boolean), descriptions: [], sitelinks: [], callouts: [],
-    },
+    adGroups: [{ name: "광고그룹 1", keywords: [], ad: blankAd(b, brandWord) }],
+    negatives: [],
+    bidAdj: JSON.parse(JSON.stringify(DEFAULT_BIDADJ)),
+    display: { targeting: "audience", frequencyCap: 3, excludedPlacements: [] },
     biz: b,
   };
 }
 function startWizard(from) {
   if (!hasBiz()) { go("business"); return; }
-  state.draft = newDraft(from && from.goal ? from : null);
+  state.draft = newDraft(from && (from.goal || from.adGroups) ? from : null);
   state.step = 0;
+  state.agTab = 0;
   $("#wizard").classList.add("on");
   document.body.style.overflow = "hidden";
   renderWizard();
@@ -2090,18 +2603,30 @@ function closeWizard() {
   state.draft = null;
 }
 
+const adsOk = d => d.adGroups.every(g =>
+  g.ad.headlines.filter(Boolean).length >= 3 &&
+  g.ad.descriptions.filter(Boolean).length >= 2 &&
+  /^https?:\/\/.+/.test(g.ad.finalUrl));
+
 const STEPS = [
   { t: "캠페인 목표", r: stepGoal, ok: d => !!d.goal },
   { t: "캠페인 유형", r: stepType, ok: () => true },
   { t: "캠페인 설정", r: stepSettings, ok: d => d.name.trim().length > 0 },
   { t: "예산 및 입찰", r: stepBudget, ok: d => d.budget >= 1000 },
-  { t: "키워드", r: stepKeywords, ok: d => d.keywords.length > 0 },
-  { t: "광고 만들기", r: stepAd, ok: d => d.ad.headlines.filter(Boolean).length >= 3 && d.ad.descriptions.filter(Boolean).length >= 2 && /^https?:\/\/.+/.test(d.ad.finalUrl) },
+  { t: "입찰 조정", r: stepBidAdj, ok: () => true },
+  { t: d => d.type === "display" ? "타겟팅" : "광고그룹 및 키워드", r: stepGroups,
+    ok: d => d.type === "display" ? true : d.adGroups.every(g => g.name.trim()) && d.adGroups.some(g => g.keywords.length > 0) },
+  { t: "광고 만들기", r: stepAd, ok: adsOk },
+  { t: "제외 키워드", r: stepNegatives, ok: () => true, skip: d => d.type === "display" },
   { t: "검토 및 게재", r: stepReview, ok: () => true },
 ];
+const liveSteps = d => STEPS.filter(s => !(s.skip && s.skip(d)));
+const stepTitle = (s, d) => typeof s.t === "function" ? s.t(d) : s.t;
 
 function renderWizard() {
   const d = state.draft, host = $("#wizard");
+  const steps = liveSteps(d);
+  if (state.step >= steps.length) state.step = steps.length - 1;
   host.innerHTML = "";
   host.append(el("div", { class: "wiz-top" }, [
     el("button", { class: "icon-btn", "aria-label": "닫기", html: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.4 17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z"/></svg>', onclick: closeWizard }),
@@ -2112,41 +2637,48 @@ function renderWizard() {
 
   const body = el("div", { class: "wiz-body" });
   const rail = el("div", { class: "wiz-steps" });
-  STEPS.forEach((s, i) => rail.append(el("div", {
+  steps.forEach((s, i) => rail.append(el("div", {
     class: "step " + (i < state.step ? "done" : i === state.step ? "now" : ""),
     style: i < state.step ? "cursor:pointer" : "",
     onclick: i < state.step ? () => { state.step = i; renderWizard(); } : null,
   }, [
     el("span", { class: "dot", text: i < state.step ? "✓" : String(i + 1) }),
-    el("span", { text: s.t }),
+    el("span", { text: stepTitle(s, d) }),
   ])));
   body.append(rail);
 
   const mainCol = el("div", { class: "wiz-main" });
   const inner = el("div", { class: "wiz-inner" });
-  STEPS[state.step].r(d, inner);
+  steps[state.step].r(d, inner);
   mainCol.append(inner); body.append(mainCol);
   host.append(body);
 
-  const canNext = STEPS[state.step].ok(d);
-  const last = state.step === STEPS.length - 1;
+  const canNext = steps[state.step].ok(d);
+  const last = state.step === steps.length - 1;
   host.append(el("div", { class: "wiz-foot" }, [
     state.step > 0 ? el("button", { class: "btn btn-text", text: "뒤로", onclick: () => { state.step--; renderWizard(); } }) : null,
     el("div", { class: "spacer" }),
-    !canNext ? el("span", { class: "hint warn", text: hintFor(state.step, d) }) : null,
+    !canNext ? el("span", { class: "hint warn", text: hintFor(steps[state.step], d) }) : null,
     last
       ? el("button", { class: "btn btn-primary", text: "게재하기", onclick: publish })
       : el("button", { class: "btn btn-primary", text: "다음", disabled: !canNext || undefined, onclick: () => { state.step++; renderWizard(); } }),
   ]));
 }
-function hintFor(i, d) {
-  if (i === 2) return "캠페인 이름을 입력하세요.";
-  if (i === 3) return "일일 예산은 1,000원 이상이어야 합니다.";
-  if (i === 4) return "키워드를 최소 1개 입력하세요.";
-  if (i === 5) {
-    if (!/^https?:\/\/.+/.test(d.ad.finalUrl)) return "최종 URL을 https:// 형식으로 입력하세요.";
-    if (d.ad.headlines.filter(Boolean).length < 3) return "제목은 최소 3개가 필요합니다.";
-    return "설명은 최소 2개가 필요합니다.";
+function hintFor(s, d) {
+  const t = stepTitle(s, d);
+  if (t === "캠페인 설정") return "캠페인 이름을 입력하세요.";
+  if (t === "예산 및 입찰") return "일일 예산은 1,000원 이상이어야 합니다.";
+  if (t === "광고그룹 및 키워드") {
+    if (!d.adGroups.every(g => g.name.trim())) return "광고그룹 이름을 입력하세요.";
+    return "키워드를 최소 1개 입력하세요.";
+  }
+  if (t === "광고 만들기") {
+    const bad = d.adGroups.find(g => !/^https?:\/\/.+/.test(g.ad.finalUrl));
+    if (bad) return "‘" + bad.name + "’의 최종 URL을 https:// 형식으로 입력하세요.";
+    const h = d.adGroups.find(g => g.ad.headlines.filter(Boolean).length < 3);
+    if (h) return "‘" + h.name + "’의 제목이 3개 미만입니다.";
+    const p = d.adGroups.find(g => g.ad.descriptions.filter(Boolean).length < 2);
+    if (p) return "‘" + p.name + "’의 설명이 2개 미만입니다.";
   }
   return "";
 }
@@ -2163,20 +2695,27 @@ function stepGoal(d, w) {
     ]));
   });
   w.append(g);
-  w.append(el("div", { class: "banner banner-info", html: ICON.info + "<div><b>" + esc(state.biz.name) + "</b>은(는) " + esc(MODELS[state.biz.model].name) + " 모델입니다. 전환은 <b>" + esc(convName(state.biz)) + "</b>으로 집계되며, 목표 전환수는 " + state.biz.targets.conversions + "건입니다.</div>" }));
+  w.append(el("div", { class: "banner banner-info", html: ICON.info + "<div><b>" + esc(state.biz.name) + "</b>의 전환은 <b>" + esc(convName(state.biz)) + "</b>으로 집계되며, 목표 전환수는 " + state.biz.targets.conversions + "건입니다.</div>" }));
 }
 
 /* 2. 유형 */
+const CAMPAIGN_TYPES = {
+  search: { name: "검색", desc: "구글에서 우리 상품을 찾고 있는 사람에게 텍스트 광고를 노출합니다. 의도가 명확해 전환율이 가장 높습니다." },
+  display: { name: "디스플레이", desc: "웹사이트·앱·유튜브 지면에 배너를 노출합니다. 도달이 넓고 클릭이 싸지만, 아직 찾고 있지 않은 사람에게 보여주므로 전환율이 훨씬 낮습니다." },
+};
 function stepType(d, w) {
-  w.append(wizHead("캠페인 유형: 검색", "이 실습은 검색 캠페인만 다룹니다."));
-  w.append(el("label", { class: "opt sel" }, [
-    el("input", { type: "radio", checked: true, readonly: true }),
-    el("div", {}, [el("div", { class: "t", text: "검색" }), el("div", { class: "d", text: "구글에서 우리 상품을 찾고 있는 사람에게 텍스트 광고를 노출합니다. 의도가 명확해 전환율이 가장 높은 채널입니다." })]),
-  ]));
-  ["디스플레이", "동영상", "쇼핑", "실적 최대화"].forEach(n => w.append(el("label", { class: "opt", style: "opacity:.5;cursor:not-allowed" }, [
+  w.append(wizHead("캠페인 유형을 선택하세요", "유형에 따라 타겟팅 방식과 성과 지표가 완전히 달라집니다."));
+  Object.entries(CAMPAIGN_TYPES).forEach(([k, v]) => {
+    w.append(el("label", { class: "opt" + (d.type === k ? " sel" : "") }, [
+      el("input", { type: "radio", name: "ctype", checked: d.type === k || undefined, onchange: () => { d.type = k; if (k === "display" && d.name.startsWith("검색")) d.name = "디스플레이 캠페인 " + (state.campaigns.length + 1); renderWizard(); } }),
+      el("div", {}, [el("div", { class: "t", text: v.name }), el("div", { class: "d", text: v.desc })]),
+    ]));
+  });
+  ["동영상", "쇼핑", "실적 최대화", "앱"].forEach(n => w.append(el("label", { class: "opt", style: "opacity:.5;cursor:not-allowed" }, [
     el("input", { type: "radio", disabled: true }),
     el("div", {}, [el("div", { class: "t", text: n }), el("div", { class: "d", text: "이번 실습 범위 밖입니다." })]),
   ])));
+  if (d.type === "display") w.append(el("div", { class: "banner banner-warn", html: ICON.warn + "<div>디스플레이는 <b>키워드가 없습니다.</b> 대신 잠재고객·주제·게재위치로 타겟팅하고, 검색어 보고서 자리에 <b>게재위치 보고서</b>가 옵니다.</div>" }));
 }
 
 /* 3. 설정 */
@@ -2193,15 +2732,19 @@ function stepSettings(d, w) {
   g.append(row("언어", lang, "사이트가 지원하는 언어와 맞춰야 합니다."));
   w.append(g);
   if (GEOS[d.geo].mismatch || LANGS[d.lang].mismatch)
-    w.append(el("div", { class: "banner banner-warn", html: ICON.warn + "<div>선택한 지역·언어가 " + esc(state.biz.name) + "의 실제 서비스 범위를 넘습니다. 노출은 늘지만 전환되지 않는 클릭에 예산을 쓰게 됩니다.</div>" }));
+    w.append(el("div", { class: "banner banner-warn", html: ICON.warn + "<div>선택한 지역·언어가 " + esc(state.biz.name) + "의 실제 서비스 범위를 넘습니다.</div>" }));
 
-  w.append(el("label", { class: "opt" + (d.displayExpansion ? " sel" : "") }, [
-    el("input", { type: "checkbox", checked: d.displayExpansion || undefined, onchange: e => { d.displayExpansion = e.target.checked; renderWizard(); } }),
-    el("div", {}, [el("div", { class: "t", text: "디스플레이 네트워크 확장" }), el("div", { class: "d", text: "검색 예산이 남을 때 디스플레이에도 노출합니다. 노출은 크게 늘지만 검색 대비 전환 의도가 낮습니다." })]),
-  ]));
+  if (d.type === "search") {
+    w.append(el("label", { class: "opt" + (d.displayExpansion ? " sel" : "") }, [
+      el("input", { type: "checkbox", checked: d.displayExpansion || undefined, onchange: e => { d.displayExpansion = e.target.checked; renderWizard(); } }),
+      el("div", {}, [el("div", { class: "t", text: "디스플레이 네트워크 확장" }),
+        el("div", { class: "d", text: "검색 예산이 남을 때 디스플레이에도 노출합니다. 노출은 크게 늘지만 전환 의도가 낮습니다." })]),
+    ]));
+  }
   w.append(el("label", { class: "opt" + (d.conversionTracking ? " sel" : "") }, [
     el("input", { type: "checkbox", checked: d.conversionTracking || undefined, onchange: e => { d.conversionTracking = e.target.checked; renderWizard(); } }),
-    el("div", {}, [el("div", { class: "t", text: "전환 추적 사용" }), el("div", { class: "d", text: "끄면 전환이 0으로 측정되고 자동 입찰이 학습할 데이터가 없습니다. 일부러 꺼보고 결과를 비교해 보세요." })]),
+    el("div", {}, [el("div", { class: "t", text: "전환 추적 사용" }),
+      el("div", { class: "d", text: "끄면 전환이 0으로 측정되고 자동 입찰이 학습할 데이터가 없습니다." })]),
   ]));
 }
 
@@ -2218,28 +2761,23 @@ function stepBudget(d, w) {
   Object.entries(BIDDING).forEach(([k, v]) => {
     w.append(el("label", { class: "opt" + (d.bidding === k ? " sel" : "") }, [
       el("input", { type: "radio", name: "bid", checked: d.bidding === k || undefined, onchange: () => { d.bidding = k; renderWizard(); } }),
-      el("div", { style: "flex:1" }, [
-        el("div", { class: "t", text: v.name }),
-        el("div", { class: "d", text: v.desc + (v.learnDays ? " · 학습 기간 " + v.learnDays + "일" : "") }),
-      ]),
+      el("div", { style: "flex:1" }, [el("div", { class: "t", text: v.name }),
+        el("div", { class: "d", text: v.desc + (v.learnDays ? " · 학습 기간 " + v.learnDays + "일" : "") })]),
     ]));
   });
   if (d.bidding === "target_cpa") {
     const rec = recommendedCpa(state.biz, d.goal);
     const warnEl = el("div", { class: "hint" });
     const upd = () => {
-      if (d.targetCpa < rec.low * 0.65) { warnEl.className = "hint warn"; warnEl.textContent = "권장 범위보다 크게 낮습니다. 시스템이 입찰을 포기해 노출이 거의 나오지 않을 수 있습니다."; }
-      else if (d.targetCpa > rec.high * 1.6) { warnEl.className = "hint warn"; warnEl.textContent = "권장 범위보다 훨씬 높습니다. 전환은 늘지만 전환당비용이 비싸집니다."; }
+      if (d.targetCpa < rec.low * 0.65) { warnEl.className = "hint warn"; warnEl.textContent = "권장 범위보다 크게 낮습니다. 노출이 거의 나오지 않을 수 있습니다."; }
+      else if (d.targetCpa > rec.high * 1.6) { warnEl.className = "hint warn"; warnEl.textContent = "권장 범위보다 훨씬 높습니다. 전환당비용이 비싸집니다."; }
       else { warnEl.className = "hint"; warnEl.textContent = "권장 범위 안입니다."; }
     };
-    const inp = el("input", {
-      class: "inp", type: "number", min: 100, step: 500, value: d.targetCpa,
-      oninput: e => { d.targetCpa = +e.target.value || 0; upd(); },
-    });
+    const inp = el("input", { class: "inp", type: "number", min: 100, step: 500, value: d.targetCpa, oninput: e => { d.targetCpa = +e.target.value || 0; upd(); } });
     upd();
     w.append(el("div", { class: "field" }, [
       el("label", { text: "타겟 CPA (원)" }), inp,
-      el("div", { class: "hint", html: "이 업종·목표에서 <b>권장 타겟 CPA는 " + won(rec.low) + " ~ " + won(rec.high) + "</b> (중앙값 " + won(rec.mid) + ")입니다. 값은 직접 정하세요 — 낮게 잡을수록 전환당비용은 싸지지만 노출량이 줄어듭니다." }),
+      el("div", { class: "hint", html: "이 업종·목표에서 <b>권장 타겟 CPA는 " + won(rec.low) + " ~ " + won(rec.high) + "</b> (중앙값 " + won(rec.mid) + ")입니다." }),
       warnEl,
       el("div", { class: "chips" }, [
         el("button", { class: "chip", text: "권장값 " + won(rec.mid) + " 적용", onclick: () => { d.targetCpa = rec.mid; inp.value = rec.mid; upd(); } }),
@@ -2256,7 +2794,57 @@ function stepBudget(d, w) {
   }
 }
 
-/* 5. 키워드 */
+/* 5. 입찰 조정 */
+function adjSlider(label, value, onch, hint) {
+  const out = el("span", { class: "num", style: "min-width:64px;text-align:right;font-weight:500" });
+  const paint = v => { out.textContent = (v > 0 ? "+" : "") + Math.round(v * 100) + "%"; out.style.color = v > 0 ? "var(--good)" : v < 0 ? "var(--crit)" : "var(--ink-2)"; };
+  const inp = el("input", {
+    type: "range", min: -90, max: 300, step: 5, value: Math.round(value * 100),
+    style: "flex:1;accent-color:var(--blue)",
+    oninput: e => { const v = (+e.target.value) / 100; paint(v); onch(v); },
+  });
+  paint(value);
+  return el("div", { class: "field" }, [
+    el("label", { text: label }),
+    el("div", { style: "display:flex;gap:12px;align-items:center" }, [inp, out]),
+    hint ? el("div", { class: "hint", text: hint }) : null,
+  ]);
+}
+function stepBidAdj(d, w) {
+  const ind = INDUSTRIES[state.biz.industry];
+  w.append(wizHead("입찰 조정", "기기·시간대·요일마다 입찰가를 올리거나 내립니다. 같은 예산으로 더 좋은 트래픽을 살 수 있습니다."));
+  w.append(el("div", { class: "banner banner-info", html: ICON.info + "<div><b>" + esc(ind.name) + "</b> 업종의 실제 트래픽 분포입니다 — 기기: " +
+    DEVICES.map(dv => DEV_LABEL[dv] + " " + Math.round(ind.dev[dv] * 100) + "%").join(" · ") +
+    ". 이 분포를 보고 어디에 더 쓸지 정하세요. 조정하지 않아도 게재는 됩니다.</div>" }));
+
+  const g1 = el("div", { style: "display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px" });
+  DEVICES.forEach(dv => g1.append(adjSlider(DEV_LABEL[dv] + " 입찰 조정", d.bidAdj.device[dv] || 0,
+    v => { d.bidAdj.device[dv] = v; }, "트래픽 비중 " + Math.round(ind.dev[dv] * 100) + "%")));
+  w.append(el("div", { class: "card" }, [
+    el("div", { class: "card-head" }, [el("h3", { text: "기기" })]),
+    el("div", { class: "card-body" }, [g1]),
+  ]));
+
+  const g2 = el("div", { style: "display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px" });
+  const HOUR_W = HOUR_SHAPES[ind.hours];
+  HOUR_BLOCKS.forEach(b => {
+    let sh = 0; for (let h = b.from; h < b.to; h++) sh += HOUR_W[h];
+    g2.append(adjSlider(b.name, d.bidAdj.block[b.key] || 0,
+      v => { d.bidAdj.block[b.key] = v; }, "검색 비중 " + Math.round(sh * 100) + "%"));
+  });
+  w.append(el("div", { class: "card" }, [
+    el("div", { class: "card-head" }, [el("h3", { text: "시간대" })]),
+    el("div", { class: "card-body" }, [g2]),
+  ]));
+
+  w.append(el("div", { class: "card" }, [
+    el("div", { class: "card-head" }, [el("h3", { text: "요일" })]),
+    el("div", { class: "card-body" }, [adjSlider("주말 입찰 조정", d.bidAdj.weekend || 0,
+      v => { d.bidAdj.weekend = v; }, "이 업종의 주말 수요는 평일 대비 " + Math.round(ind.seasonWeekend * 100) + "% 수준입니다.")]),
+  ]));
+}
+
+/* 6. 광고그룹 및 키워드 / 타겟팅 */
 function parseKeywords(text) {
   return text.split(/[\n,]/).map(s => s.trim()).filter(Boolean).map(s => {
     if (/^\[.+\]$/.test(s)) return { text: s.slice(1, -1).trim(), match: "exact" };
@@ -2264,64 +2852,142 @@ function parseKeywords(text) {
     return { text: s, match: "broad" };
   }).filter(k => k.text);
 }
-function stepKeywords(d, w) {
-  w.append(wizHead("키워드", "고객이 실제로 검색할 말을 넣으세요. 검색유형 기호를 그대로 쓸 수 있습니다."));
-  const ta = el("textarea", {
-    class: "inp", style: "min-height:150px",
-    value: d.keywords.map(k => MATCH[k.match].fmt(k.text)).join("\n"),
-    placeholder: "홈트레이닝 클래스\n\"홈트 온라인 강의\"\n[집에서 하는 운동]",
-    oninput: e => { d.keywords = parseKeywords(e.target.value); renderPreview(); },
-  });
-  w.append(el("div", { class: "field" }, [
-    el("label", { text: "키워드 (한 줄에 하나)" }), ta,
-    el("div", { class: "hint", html: "<b>홈트</b> = 확장검색 · <b>\"홈트\"</b> = 구문검색 · <b>[홈트]</b> = 일치검색. 확장검색은 도달이 넓은 대신 무관한 검색어까지 끌어옵니다." }),
-  ]));
-  const sug = el("div", { class: "chips" });
-  const ind = INDUSTRIES[state.biz.industry];
-  const brandTok = tokenize(state.biz.name + " " + state.biz.desc).slice(0, 4);
-  const ideas = [...new Set([...ind.seeds.slice(0, 6).map(s => (brandTok[0] || "") + " " + s), ...ind.seeds.slice(0, 4)])].map(s => s.trim()).filter(Boolean);
-  ideas.forEach(s => sug.append(el("button", { class: "chip", text: "+ " + s, onclick: () => { ta.value = (ta.value ? ta.value + "\n" : "") + s; d.keywords = parseKeywords(ta.value); renderPreview(); } })));
-  w.append(el("div", { class: "field" }, [el("label", { text: "이 업종에서 자주 쓰이는 키워드" }), sug]));
+function stepGroups(d, w) {
+  if (d.type === "display") return stepDisplayTargeting(d, w);
+  w.append(wizHead("광고그룹 및 키워드",
+    "주제가 비슷한 키워드끼리 묶어 광고그룹을 만드세요. 그룹마다 다른 광고를 쓸 수 있어 관련성이 올라갑니다."));
+  const prof = bizProfile(state.biz);
 
-  const preview = el("div"); w.append(preview);
-  function renderPreview() {
-    preview.innerHTML = "";
-    if (!d.keywords.length) return;
-    const prof = bizProfile(state.biz);
-    const t = tbl(["키워드", "검색유형", "월 검색량(추정)", "경쟁", "시장 CPC", "브랜드 적합도", "판정"]);
-    d.keywords.forEach(k => {
-      const o = classifyKeyword(k.text, prof);
-      t.body.append(el("tr", {}, [
-        td(MATCH[k.match].fmt(k.text)), td(MATCH[k.match].name), td(int(o.volume)),
-        td(o.competition >= 0.7 ? "높음" : o.competition >= 0.4 ? "보통" : "낮음"), td(won(o.marketCpc)),
-        td(pct(o.brandFit, 0)),
-        td(el("span", { class: "tag " + (o.offTarget ? "tag-crit" : o.isBrand ? "tag-good" : o.brandFit >= 0.4 ? "tag-good" : "tag-warn"), text: o.offTarget ? "고객 아님" : o.isBrand ? "브랜드 검색" : o.brandFit >= 0.4 ? "적합" : "관련 약함" })),
+  const list = el("div", { class: "grid", style: "gap:14px" });
+  const paint = () => {
+    list.innerHTML = "";
+    d.adGroups.forEach((g, gi) => {
+      const ta = el("textarea", {
+        class: "inp", style: "min-height:110px",
+        value: g.keywords.map(k => MATCH[k.match].fmt(k.text)).join("\n"),
+        placeholder: "홈트레이닝 클래스\n\"홈트 온라인 강의\"\n[집에서 하는 운동]",
+        oninput: e => { g.keywords = parseKeywords(e.target.value); renderDiag(); renderFootOnly(); },
+      });
+      const diagHost = el("div");
+      const renderDiag = () => {
+        diagHost.innerHTML = "";
+        if (!g.keywords.length) return;
+        const t = tbl(["키워드", "검색유형", "월 검색량", "경쟁", "시장 CPC", "판정"]);
+        g.keywords.forEach(k => {
+          const o = classifyKeyword(k.text, prof);
+          t.body.append(el("tr", {}, [
+            td(MATCH[k.match].fmt(k.text)), td(MATCH[k.match].name), td(int(o.volume)),
+            td(o.competition >= 0.7 ? "높음" : o.competition >= 0.4 ? "보통" : "낮음"), td(won(o.marketCpc)),
+            td(el("span", { class: "tag " + (o.offTarget ? "tag-crit" : o.isBrand ? "tag-good" : o.brandFit >= 0.4 ? "tag-good" : "tag-warn"), text: o.offTarget ? "고객 아님" : o.isBrand ? "브랜드 검색" : o.brandFit >= 0.4 ? "적합" : "관련 약함" })),
+          ]));
+        });
+        diagHost.append(el("div", { class: "tbl-wrap" }, [t.table]));
+      };
+      renderDiag();
+      list.append(el("div", { class: "card" }, [
+        el("div", { class: "card-head" }, [
+          el("input", { class: "inp", style: "max-width:280px;font-weight:500", value: g.name,
+            oninput: e => { g.name = e.target.value; renderFootOnly(); } }),
+          el("span", { class: "sub", text: g.keywords.length + "개 키워드" }),
+          d.adGroups.length > 1 ? el("button", {
+            class: "btn btn-text btn-sm", style: "margin-left:auto", text: "그룹 삭제",
+            onclick: () => { d.adGroups.splice(gi, 1); paint(); renderFootOnly(); },
+          }) : null,
+        ]),
+        el("div", { class: "card-body grid", style: "gap:12px" }, [
+          ta,
+          el("div", { class: "hint", html: "<b>홈트</b> = 확장검색 · <b>\"홈트\"</b> = 구문검색 · <b>[홈트]</b> = 일치검색" }),
+          diagHost,
+        ]),
       ]));
     });
-    preview.append(el("div", { class: "card" }, [
-      el("div", { class: "card-head" }, [el("h3", { text: "키워드 진단" }), el("span", { class: "sub", text: state.biz.name + " 기준" })]),
-      el("div", { class: "tbl-wrap" }, [t.table]),
-    ]));
-  }
-  renderPreview();
+  };
+  paint();
+  w.append(list);
+  w.append(el("div", { style: "display:flex;gap:12px;align-items:center" }, [
+    el("button", {
+      class: "btn btn-outline", html: ICON.plus + "광고그룹 추가",
+      onclick: () => {
+        const brandWord = (state.biz.name || "").split(/\s+/)[0] || "";
+        d.adGroups.push({ name: "광고그룹 " + (d.adGroups.length + 1), keywords: [], ad: blankAd(state.biz, brandWord) });
+        paint(); renderFootOnly();
+      },
+    }),
+    el("span", { class: "hint", text: "그룹을 나누면 그룹마다 별도의 광고를 씁니다. 품질평가점수가 올라갑니다." }),
+  ]));
+
+  const ind = INDUSTRIES[state.biz.industry];
+  const brandTok = tokenize(state.biz.name + " " + state.biz.desc).slice(0, 3);
+  const ideas = [...new Set([...ind.seeds.slice(0, 6).map(s => (brandTok[0] || "") + " " + s), ...ind.seeds.slice(0, 4)])].map(s => s.trim()).filter(Boolean);
+  const sug = el("div", { class: "chips" });
+  ideas.forEach(s => sug.append(el("button", {
+    class: "chip", text: "+ " + s,
+    onclick: () => { const g = d.adGroups[0]; g.keywords = g.keywords.concat(parseKeywords(s)); paint(); renderFootOnly(); },
+  })));
+  w.append(el("div", { class: "field" }, [el("label", { text: "이 업종에서 자주 쓰이는 키워드 (첫 번째 그룹에 추가)" }), sug]));
 }
 
-/* 6. 광고 */
-function stepAd(d, w) {
-  const ad = d.ad;
-  w.append(wizHead("광고 만들기", "반응형 검색광고는 제목·설명을 조합해 노출합니다. 자산이 많을수록 유리합니다."));
-  const g = el("div", { style: "display:grid;grid-template-columns:2fr 1fr 1fr;gap:14px" });
-  g.append(el("div", { class: "field" }, [el("label", { text: "최종 URL" }),
-    el("input", { class: "inp", value: ad.finalUrl, oninput: e => { ad.finalUrl = e.target.value.trim(); renderWizard(); } }),
-    el("div", { class: "hint", text: "비즈니스 도메인(" + state.biz.url + ")과 다르면 방문 페이지 점수가 떨어집니다." })]));
-  g.append(el("div", { class: "field" }, [el("label", { text: "표시 경로 1" }), el("input", { class: "inp", maxlength: 15, value: ad.path1, oninput: e => { ad.path1 = e.target.value; renderPrev(); } })]));
-  g.append(el("div", { class: "field" }, [el("label", { text: "표시 경로 2" }), el("input", { class: "inp", maxlength: 15, value: ad.path2, oninput: e => { ad.path2 = e.target.value; renderPrev(); } })]));
-  w.append(g);
+function stepDisplayTargeting(d, w) {
+  w.append(wizHead("타겟팅", "디스플레이는 키워드가 없습니다. 누구에게 보여줄지 방식을 고르세요."));
+  Object.entries(DISPLAY_TARGETING).forEach(([k, v]) => {
+    w.append(el("label", { class: "opt" + (d.display.targeting === k ? " sel" : "") }, [
+      el("input", { type: "radio", name: "dtar", checked: d.display.targeting === k || undefined, onchange: () => { d.display.targeting = k; renderWizard(); } }),
+      el("div", {}, [el("div", { class: "t", text: v.name }),
+        el("div", { class: "d", text: v.desc + " · 도달 " + Math.round(v.reach * 100) + "% · 무관 지면 비중 약 " + Math.round(v.junk * 100) + "%" })]),
+    ]));
+  });
+  w.append(el("div", { class: "field" }, [
+    el("label", { text: "노출 빈도 한도 (1인당 하루 최대 노출 횟수)" }),
+    el("input", { class: "inp", type: "number", min: 1, max: 20, value: d.display.frequencyCap,
+      oninput: e => { d.display.frequencyCap = clamp(+e.target.value || 1, 1, 20); } }),
+    el("div", { class: "hint", text: "높일수록 같은 사람에게 반복 노출됩니다. 반응률이 빠르게 떨어집니다." }),
+  ]));
+  const prev = buildPlacements(bizProfile(state.biz), d.display, mulberry32(hashStr(d.display.targeting + state.biz.industry)));
+  const t = tbl(["게재위치", "관련도", "예상 비중"]);
+  prev.list.slice().sort((a, b) => b.w - a.w).forEach(p => {
+    const tag = p.rel === "relevant" ? ["tag-good", "관련"] : p.rel === "loose" ? ["tag-warn", "느슨함"] : ["tag-crit", "무관"];
+    t.body.append(el("tr", {}, [td(p.name), td(el("span", { class: "tag " + tag[0], text: tag[1] })), td(pct(p.w, 1))]));
+  });
+  w.append(el("div", { class: "card" }, [
+    el("div", { class: "card-head" }, [el("h3", { text: "이 타겟팅으로 나갈 지면" }), el("span", { class: "sub", text: "게재 후 보고서에서 제외할 수 있습니다" })]),
+    el("div", { class: "tbl-wrap" }, [t.table]),
+  ]));
+}
 
-  w.append(assetList("제목", ad.headlines, 15, 30, "혜택·가격·신뢰·행동유도를 서로 다른 각도로 쓰세요.", renderPrev));
+/* 7. 광고 만들기 */
+function stepAd(d, w) {
+  w.append(wizHead("광고 만들기", d.type === "display"
+    ? "디스플레이 광고에 쓸 제목과 설명, 최종 URL을 입력하세요."
+    : "광고그룹마다 그 그룹의 키워드를 그대로 말하는 광고를 쓰세요. 그래야 품질평가점수가 올라갑니다."));
+
+  if (d.adGroups.length > 1) {
+    const tabs = el("div", { class: "tabs", role: "tablist" });
+    d.adGroups.forEach((g, i) => tabs.append(el("button", {
+      class: "tab", role: "tab", text: g.name, "aria-selected": state.agTab === i ? "true" : "false",
+      onclick: () => { state.agTab = i; renderWizard(); },
+    })));
+    w.append(tabs);
+  }
+  const gi = clamp(state.agTab || 0, 0, d.adGroups.length - 1);
+  const g = d.adGroups[gi], ad = g.ad;
+  if (d.adGroups.length > 1) {
+    w.append(el("div", { class: "hint", text: "‘" + g.name + "’의 키워드: " + (g.keywords.map(k => k.text).join(", ") || "없음") }));
+  }
+
+  const grid = el("div", { style: "display:grid;grid-template-columns:2fr 1fr 1fr;gap:14px" });
+  grid.append(el("div", { class: "field" }, [el("label", { text: "최종 URL" }),
+    el("input", { class: "inp", value: ad.finalUrl, oninput: e => { ad.finalUrl = e.target.value.trim(); renderPrev(); renderFootOnly(); } }),
+    el("div", { class: "hint", text: "비즈니스 도메인(" + state.biz.url + ")과 다르면 방문 페이지 점수가 떨어집니다." })]));
+  grid.append(el("div", { class: "field" }, [el("label", { text: "표시 경로 1" }), el("input", { class: "inp", maxlength: 15, value: ad.path1, oninput: e => { ad.path1 = e.target.value; renderPrev(); } })]));
+  grid.append(el("div", { class: "field" }, [el("label", { text: "표시 경로 2" }), el("input", { class: "inp", maxlength: 15, value: ad.path2, oninput: e => { ad.path2 = e.target.value; renderPrev(); } })]));
+  w.append(grid);
+
+  w.append(assetList("제목", ad.headlines, 15, 30, "이 그룹의 키워드를 제목에 그대로 넣으세요.", renderPrev));
   w.append(assetList("설명", ad.descriptions, 4, 90, "제목에서 못 다 한 근거와 차별점을 적으세요.", renderPrev));
-  w.append(assetList("사이트링크", ad.sitelinks, 4, 25, "추가 비용 없이 광고 면적을 넓혀 CTR을 올립니다.", renderPrev));
-  w.append(assetList("콜아웃", ad.callouts, 4, 25, "무료 배송, 당일 상담 같은 짧은 강점입니다.", renderPrev));
+  if (d.type === "search") {
+    w.append(assetList("사이트링크", ad.sitelinks, 4, 25, "추가 비용 없이 광고 면적을 넓혀 CTR을 올립니다.", renderPrev));
+    w.append(assetList("콜아웃", ad.callouts, 4, 25, "무료 배송, 당일 상담 같은 짧은 강점입니다.", renderPrev));
+  }
 
   const prevHost = el("div"); w.append(prevHost);
   function renderPrev() {
@@ -2344,17 +3010,18 @@ function assetList(label, arr, max, maxLen, hint, onChange) {
   const box = el("div", { class: "field" });
   box.append(el("label", { text: label + " (" + arr.length + "/" + max + ")" }));
   const list = el("div", { class: "grid", style: "gap:8px" });
+  const relabel = () => { box.firstChild.textContent = label + " (" + arr.length + "/" + max + ")"; };
   const paint = () => {
     list.innerHTML = "";
     arr.forEach((v, i) => {
+      const cnt = el("span", { class: "counter", text: (v || "").length + "/" + maxLen, style: "min-width:52px" });
       const inp = el("input", {
         class: "inp", value: v, maxlength: maxLen,
-        oninput: e => { arr[i] = e.target.value; cnt.textContent = e.target.value.length + "/" + maxLen; onChange && onChange(); },
+        oninput: e => { arr[i] = e.target.value; cnt.textContent = e.target.value.length + "/" + maxLen; onChange && onChange(); renderFootOnly(); },
       });
-      const cnt = el("span", { class: "counter", text: (v || "").length + "/" + maxLen, style: "min-width:52px" });
       list.append(el("div", { style: "display:flex;gap:8px;align-items:center" }, [
         inp, cnt,
-        el("button", { class: "icon-btn", "aria-label": "삭제", html: ICON.x, onclick: () => { arr.splice(i, 1); paint(); box.firstChild.textContent = label + " (" + arr.length + "/" + max + ")"; onChange && onChange(); renderFootOnly(); } }),
+        el("button", { class: "icon-btn", "aria-label": "삭제", html: ICON.x, onclick: () => { arr.splice(i, 1); paint(); relabel(); onChange && onChange(); renderFootOnly(); } }),
       ]));
     });
   };
@@ -2363,55 +3030,124 @@ function assetList(label, arr, max, maxLen, hint, onChange) {
   box.append(el("div", { style: "display:flex;gap:10px;align-items:center;margin-top:4px" }, [
     el("button", {
       class: "btn btn-outline btn-sm", html: ICON.plus + label + " 추가",
-      onclick: e => { if (arr.length >= max) return; arr.push(""); paint(); box.firstChild.textContent = label + " (" + arr.length + "/" + max + ")"; onChange && onChange(); renderFootOnly(); },
+      onclick: () => { if (arr.length >= max) return; arr.push(""); paint(); relabel(); onChange && onChange(); renderFootOnly(); },
     }),
     el("span", { class: "hint", text: hint }),
   ]));
   return box;
 }
-/* 자산 추가/삭제 후 하단 '다음' 버튼 활성 상태만 갱신 */
 function renderFootOnly() {
   const d = state.draft; if (!d) return;
   const foot = $(".wiz-foot"); if (!foot) return;
+  const steps = liveSteps(d);
   const btn = [...foot.querySelectorAll("button")].pop();
-  const ok = STEPS[state.step].ok(d);
-  if (btn) btn.disabled = !ok && state.step !== STEPS.length - 1;
-  const h = foot.querySelector(".hint");
-  if (h) h.textContent = ok ? "" : hintFor(state.step, d);
+  const ok = steps[state.step].ok(d);
+  if (btn) btn.disabled = !ok && state.step !== steps.length - 1;
+  let h = foot.querySelector(".hint");
+  if (!h && !ok) { h = el("span", { class: "hint warn" }); foot.insertBefore(h, btn); }
+  if (h) h.textContent = ok ? "" : hintFor(steps[state.step], d);
 }
 
-/* 7. 검토 */
+/* 8. 제외 키워드 */
+function stepNegatives(d, w) {
+  w.append(wizHead("제외 키워드", "여기 적은 표현이 들어간 검색어에는 광고가 나가지 않습니다. 게재 후 검색어 보고서를 보고 계속 추가하게 됩니다."));
+  const ta = el("textarea", {
+    class: "inp", style: "min-height:120px",
+    value: d.negatives.map(k => MATCH[k.match].fmt(k.text)).join("\n"),
+    placeholder: "무료\n채용\n[헬스장]",
+    oninput: e => { d.negatives = parseKeywords(e.target.value); paint(); },
+  });
+  w.append(el("div", { class: "field" }, [
+    el("label", { text: "제외 키워드 (한 줄에 하나)" }), ta,
+    el("div", { class: "hint", html: "<b>무료</b> = 확장 제외(단어가 모두 들어가면 차단) · <b>\"무료 강의\"</b> = 구문 제외 · <b>[무료]</b> = 일치 제외(정확히 같을 때만)" }),
+  ]));
+  const ind = INDUSTRIES[state.biz.industry];
+  const sug = el("div", { class: "chips" });
+  [...ind.off.slice(0, 8), ...tokenize(state.biz.exclude)].forEach(s => sug.append(el("button", {
+    class: "chip", text: "+ " + s,
+    onclick: () => { ta.value = (ta.value ? ta.value + "\n" : "") + s; d.negatives = parseKeywords(ta.value); paint(); },
+  })));
+  w.append(el("div", { class: "field" }, [el("label", { text: "이 업종에서 흔히 제외하는 표현" }), sug]));
+
+  const host = el("div"); w.append(host);
+  function paint() {
+    host.innerHTML = "";
+    if (!d.negatives.length) return;
+    const prof = bizProfile(state.biz);
+    const rows = [];
+    let selfHit = 0;
+    d.adGroups.forEach(g => g.keywords.forEach(k => {
+      const o = classifyKeyword(k.text, prof);
+      const qs = buildQueries(o, k.match, mulberry32(hashStr(k.text + k.match + state.biz.industry)), prof);
+      const blocked = qs.filter(q => negBlocks(q.q, d.negatives));
+      if (blocked.some(q => q.q === k.text)) selfHit++;
+      if (blocked.length) rows.push([k.text, blocked.length + " / " + qs.length, blocked.slice(0, 3).map(q => q.q).join(", ")]);
+    }));
+    if (selfHit) host.append(el("div", { class: "banner banner-warn", html: ICON.warn + "<div>제외 키워드가 <b>내 키워드 " + selfHit + "개</b>까지 막고 있습니다. 그 키워드는 노출이 아예 나오지 않습니다.</div>" }));
+    if (!rows.length) { host.append(el("div", { class: "hint", text: "지금 키워드로는 막히는 검색어가 없습니다." })); return; }
+    const t = tbl(["키워드", "차단되는 검색어", "예시"]);
+    rows.forEach(r => t.body.append(el("tr", {}, r.map(v => td(v)))));
+    host.append(el("div", { class: "card" }, [
+      el("div", { class: "card-head" }, [el("h3", { text: "무엇이 막히는지 미리보기" })]),
+      el("div", { class: "tbl-wrap" }, [t.table]),
+    ]));
+  }
+  paint();
+}
+
+/* 9. 검토 */
 function stepReview(d, w) {
   w.append(wizHead("검토 및 게재", "게재하면 " + (state.biz.period || 30) + "일치 성과가 즉시 시뮬레이션됩니다."));
   const kv = el("dl", { class: "kv" });
   const add = (k, v) => { kv.append(el("dt", { text: k })); kv.append(el("dd", { text: v })); };
   add("업체", state.biz.name + " · " + INDUSTRIES[state.biz.industry].name);
-  add("캠페인", d.name);
+  add("캠페인", d.name + " · " + CAMPAIGN_TYPES[d.type].name);
   add("목표", GOALS[d.goal].name);
   add("위치 · 언어", GEOS[d.geo].name + " · " + LANGS[d.lang].name);
   add("일일 예산", won(d.budget) + " (총 " + won(d.budget * (state.biz.period || 30)) + ")");
   add("입찰 전략", BIDDING[d.bidding].name + (d.bidding === "target_cpa" ? " · 타겟 CPA " + won(d.targetCpa) : (d.bidding === "manual_cpc" || d.bidding === "max_clicks") ? " · 최대 CPC " + won(d.maxCpc) : ""));
-  add("키워드", d.keywords.length + "개 (" + d.keywords.map(k => MATCH[k.match].fmt(k.text)).join(", ") + ")");
-  add("광고", "제목 " + d.ad.headlines.filter(Boolean).length + "개 · 설명 " + d.ad.descriptions.filter(Boolean).length + "개 · 확장 " + (d.ad.sitelinks.filter(Boolean).length + d.ad.callouts.filter(Boolean).length) + "개");
+  const adjParts = [];
+  DEVICES.forEach(dv => { if (d.bidAdj.device[dv]) adjParts.push(DEV_LABEL[dv] + " " + (d.bidAdj.device[dv] > 0 ? "+" : "") + Math.round(d.bidAdj.device[dv] * 100) + "%"); });
+  HOUR_BLOCKS.forEach(b => { if (d.bidAdj.block[b.key]) adjParts.push(b.name.split(" ")[0] + " " + (d.bidAdj.block[b.key] > 0 ? "+" : "") + Math.round(d.bidAdj.block[b.key] * 100) + "%"); });
+  if (d.bidAdj.weekend) adjParts.push("주말 " + (d.bidAdj.weekend > 0 ? "+" : "") + Math.round(d.bidAdj.weekend * 100) + "%");
+  add("입찰 조정", adjParts.length ? adjParts.join(" · ") : "없음");
+  if (d.type === "search") {
+    add("광고그룹", d.adGroups.length + "개");
+    d.adGroups.forEach(g => add("　" + g.name, g.keywords.length + "개 · " + g.keywords.map(k => MATCH[k.match].fmt(k.text)).join(", ")));
+    add("제외 키워드", d.negatives.length ? d.negatives.map(k => MATCH[k.match].fmt(k.text)).join(", ") : "없음");
+  } else {
+    add("타겟팅", DISPLAY_TARGETING[d.display.targeting].name);
+    add("빈도 한도", d.display.frequencyCap + "회/일");
+  }
+  add("광고", d.adGroups.map(g => g.name + ": 제목 " + g.ad.headlines.filter(Boolean).length + "개 · 설명 " + g.ad.descriptions.filter(Boolean).length + "개").join(" / "));
   add("전환 추적", d.conversionTracking ? "사용" : "사용 안 함");
   w.append(el("div", { class: "card" }, [el("div", { class: "card-body" }, [kv])]));
 
-  /* 게재 전 경고 */
   const warns = [];
+  const allKw = d.adGroups.flatMap(g => g.keywords);
   if (d.budget * (state.biz.period || 30) > state.biz.targets.budgetTotal) warns.push("총 예산이 실습 목표 예산을 초과합니다.");
   if (!d.conversionTracking) warns.push("전환 추적이 꺼져 있어 전환이 0으로 측정됩니다.");
-  if (d.keywords.every(k => k.match === "broad")) warns.push("모든 키워드가 확장검색입니다. 무관한 검색어에 예산이 샐 수 있습니다.");
-  if (d.ad.headlines.filter(Boolean).length < 8) warns.push("제목이 " + d.ad.headlines.filter(Boolean).length + "개입니다. 8개 이상을 권장합니다.");
+  if (d.type === "search") {
+    if (allKw.length && allKw.every(k => k.match === "broad")) warns.push("모든 키워드가 확장검색입니다. 무관한 검색어에 예산이 샐 수 있습니다.");
+    if (!d.negatives.length) warns.push("제외 키워드가 없습니다. 게재 후 검색어 보고서를 보고 추가하게 됩니다.");
+    if (d.adGroups.length === 1 && allKw.length >= 6) warns.push("키워드 " + allKw.length + "개가 광고그룹 하나에 몰려 있습니다. 주제별로 나누면 품질평가점수가 올라갑니다.");
+  } else {
+    if (d.display.frequencyCap >= 6) warns.push("노출 빈도 한도가 높습니다. 같은 사람에게 반복 노출됩니다.");
+    if (d.display.targeting === "audience") warns.push("잠재고객 타겟팅은 도달이 넓은 대신 무관한 지면이 많이 섞입니다.");
+  }
+  if (d.adGroups.some(g => g.ad.headlines.filter(Boolean).length < 8)) warns.push("제목이 8개 미만인 광고그룹이 있습니다.");
   if (GEOS[d.geo].mismatch || LANGS[d.lang].mismatch) warns.push("타겟 지역·언어가 실제 서비스 범위를 넘습니다.");
   if (warns.length) w.append(el("div", { class: "banner banner-warn", html: ICON.warn + "<div><b>게재 전 확인</b><ul style='margin:6px 0 0;padding-left:18px'>" + warns.map(x => "<li>" + esc(x) + "</li>").join("") + "</ul><div style='margin-top:6px;color:var(--ink-2)'>일부러 이대로 게재해 결과를 비교해 보는 것도 좋은 실습입니다.</div></div>" }));
 }
 
 function publish() {
   const d = state.draft;
-  d.ad.headlines = d.ad.headlines.filter(Boolean);
-  d.ad.descriptions = d.ad.descriptions.filter(Boolean);
-  d.ad.sitelinks = d.ad.sitelinks.filter(Boolean);
-  d.ad.callouts = d.ad.callouts.filter(Boolean);
+  d.adGroups.forEach(g => {
+    g.ad.headlines = g.ad.headlines.filter(Boolean);
+    g.ad.descriptions = g.ad.descriptions.filter(Boolean);
+    g.ad.sitelinks = g.ad.sitelinks.filter(Boolean);
+    g.ad.callouts = g.ad.callouts.filter(Boolean);
+  });
   d.biz = state.biz;
   const c = wrapCampaign(JSON.parse(JSON.stringify(d)));
   state.campaigns.push(c);
