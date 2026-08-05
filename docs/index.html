@@ -1376,7 +1376,16 @@ const state = {
   step: 0,
 };
 function save() {
-  try { localStorage.setItem(LS, JSON.stringify({ biz: state.biz, campaigns: state.campaigns.map(c => c.cfg) })); } catch (e) { }
+  try {
+    localStorage.setItem(LS, JSON.stringify({
+      biz: state.biz,
+      campaigns: state.campaigns.map(c => c.cfg),
+      current: state.current,
+      /* 담아만 두고 아직 적용하지 않은 제외 목록도 함께 보관한다 */
+      pendingNegatives: state.pendingNegatives || [],
+      pendingPlacements: state.pendingPlacements || [],
+    }));
+  } catch (e) { }
 }
 function load() {
   try {
@@ -1384,6 +1393,9 @@ function load() {
     if (!raw) return;
     state.biz = normBiz(raw.biz);
     state.campaigns = (raw.campaigns || []).map(cfg => wrapCampaign({ ...cfg, biz: normBiz(cfg.biz) }));
+    state.current = clamp(raw.current || 0, 0, Math.max(0, state.campaigns.length - 1));
+    state.pendingNegatives = raw.pendingNegatives || [];
+    state.pendingPlacements = raw.pendingPlacements || [];
   } catch (e) { }
 }
 function wrapCampaign(cfg) {
@@ -1934,7 +1946,7 @@ function pageTable(kind) {
             class: "btn btn-text btn-sm", style: "padding:2px 10px",
             text: queued ? "대기 중" : "＋ 제외",
             disabled: queued || undefined,
-            onclick: () => { pend.push({ text: q.q, match: "phrase" }); render(); },
+            onclick: () => { pend.push({ text: q.q, match: "phrase" }); save(); render(); },
           })),
       ]));
     });
@@ -1948,7 +1960,7 @@ function pageTable(kind) {
           el("span", { class: "sub", text: pend.map(n => n.text).join(", ") })]),
         el("div", { class: "card-body", style: "display:flex;gap:12px;flex-wrap:wrap" }, [
           el("button", { class: "btn btn-primary", text: "제외 키워드 적용해 다시 게재", onclick: () => go("negatives") }),
-          el("button", { class: "btn btn-text", text: "비우기", onclick: () => { state.pendingNegatives = []; render(); } }),
+          el("button", { class: "btn btn-text", text: "비우기", onclick: () => { state.pendingNegatives = []; save(); render(); } }),
         ]),
       ]));
     }
@@ -2042,7 +2054,7 @@ function pageNegatives() {
     const chips = el("div", { class: "chips" });
     pend.forEach((n, i) => chips.append(el("span", { class: "chip" }, [
       document.createTextNode(MATCH[n.match].fmt(n.text)),
-      el("button", { "aria-label": "빼기", html: ICON.x, onclick: () => { pend.splice(i, 1); render(); } }),
+      el("button", { "aria-label": "빼기", html: ICON.x, onclick: () => { pend.splice(i, 1); save(); render(); } }),
     ])));
     w.append(el("div", { class: "card" }, [
       el("div", { class: "card-head" }, [el("h3", { text: "추가 대기 " + pend.length + "개" }),
@@ -2061,7 +2073,7 @@ function pageNegatives() {
               save(); go("compare");
             }
           }),
-          el("button", { class: "btn btn-text", text: "모두 비우기", onclick: () => { state.pendingNegatives = []; render(); } }),
+          el("button", { class: "btn btn-text", text: "모두 비우기", onclick: () => { state.pendingNegatives = []; save(); render(); } }),
         ])]),
     ]));
   }
@@ -2097,7 +2109,7 @@ function pagePlacements() {
           class: "btn btn-text btn-sm", style: "padding:2px 10px",
           text: queued ? "대기 중" : "제외",
           disabled: queued || undefined,
-          onclick: () => { (state.pendingPlacements = state.pendingPlacements || []).push(p.name); render(); },
+          onclick: () => { (state.pendingPlacements = state.pendingPlacements || []).push(p.name); save(); render(); },
         })),
     ]));
   });
@@ -2124,7 +2136,7 @@ function pagePlacements() {
             save(); go("compare");
           }
         }),
-        el("button", { class: "btn btn-text", text: "비우기", onclick: () => { state.pendingPlacements = []; render(); } }),
+        el("button", { class: "btn btn-text", text: "비우기", onclick: () => { state.pendingPlacements = []; save(); render(); } }),
       ]),
     ]));
   }
