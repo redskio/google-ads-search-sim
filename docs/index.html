@@ -148,7 +148,11 @@ input,select,textarea{font:inherit;color:inherit}
 .card-head h3{margin:0;font-size:15px;font-weight:500}
 .card-head .sub{color:var(--ink-2);font-size:12.5px}
 .card-body{padding:20px}
-.grid{display:grid;gap:16px}
+.grid{display:grid;gap:16px;grid-template-columns:minmax(0,1fr)}
+/* 그리드·플렉스 자식은 기본 min-width:auto 라 넓은 표를 만나면 줄어들지 못하고
+   페이지 전체를 옆으로 밀어낸다. 표는 .tbl-wrap 안에서만 스크롤되어야 한다. */
+.grid>*{min-width:0}
+.card{min-width:0}
 
 .stat-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));gap:1px;background:var(--border-2);border-radius:8px;overflow:hidden;border:1px solid var(--border-2)}
 .stat{background:var(--surface);padding:16px 18px;display:flex;flex-direction:column;gap:5px}
@@ -158,7 +162,7 @@ input,select,textarea{font:inherit;color:inherit}
 .stat .d.bad{color:var(--crit)}
 .stat .d.ok{color:var(--good)}
 
-.tbl-wrap{overflow-x:auto}
+.tbl-wrap{overflow-x:auto;max-width:100%}
 table.tbl{width:100%;border-collapse:collapse;font-size:13.5px;min-width:640px}
 table.tbl th,table.tbl td{padding:11px 14px;text-align:right;border-bottom:1px solid var(--border-2);white-space:nowrap}
 table.tbl th{color:var(--ink-2);font-weight:500;font-size:12.5px;position:sticky;top:0;background:var(--surface)}
@@ -205,8 +209,8 @@ textarea.inp{min-height:96px;resize:vertical;line-height:1.6}
 .step.done .dot{background:var(--good);border-color:var(--good);color:var(--surface)}
 .step.now{background:var(--blue-soft);color:var(--blue-ink);font-weight:500}
 .step.now .dot{border-color:var(--blue);color:var(--blue)}
-.wiz-main{flex:1;overflow-y:auto;padding:34px 40px 120px;display:flex;justify-content:center}
-.wiz-inner{width:100%;max-width:780px;display:flex;flex-direction:column;gap:22px}
+.wiz-main{flex:1;overflow-y:auto;padding:34px 40px 0;display:flex;justify-content:center;align-items:flex-start}
+.wiz-inner{width:100%;max-width:780px;display:flex;flex-direction:column;gap:22px;padding-bottom:120px}
 .wiz-h{font-size:26px;font-weight:400;margin:0}
 .wiz-sub{color:var(--ink-2);margin:6px 0 0}
 .wiz-foot{position:absolute;bottom:0;left:266px;right:0;background:var(--surface);border-top:1px solid var(--border);padding:14px 40px;display:flex;gap:12px;align-items:center}
@@ -295,7 +299,8 @@ textarea.inp{min-height:96px;resize:vertical;line-height:1.6}
   .main{padding:16px 14px 56px}
   .wiz-steps{display:none}
   .wiz-foot{left:0;padding:12px 16px}
-  .wiz-main{padding:22px 16px 110px}
+  .wiz-main{padding:22px 16px 0}
+  .wiz-inner{padding-bottom:110px}
   .topbar{gap:2px;padding:0 6px}
   .tb-btn{padding:6px 7px;font-size:0}          /* 라벨은 숨기고 아이콘만 */
   .tb-btn svg{width:22px;height:22px}
