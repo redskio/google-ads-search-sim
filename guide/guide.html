@@ -1,0 +1,772 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>Google Ads 검색·디스플레이 광고 실습 가이드</title>
+<style>
+@page { size: A4; margin: 16mm 15mm 18mm; }
+:root{
+  --ink:#1b1c1e; --ink2:#4a4d52; --ink3:#767a80;
+  --line:#dfe1e5; --line2:#eceef1; --paper:#fff; --soft:#f6f7f9;
+  --blue:#1a73e8; --blue-soft:#e8f0fe; --blue-ink:#12468f;
+  --red:#d93025; --red-soft:#fdeceb;
+  --green:#137333; --green-soft:#e7f4ea;
+  --amber:#a15c00; --amber-soft:#fef4e2;
+  --sans:"Apple SD Gothic Neo","Noto Sans KR","Malgun Gothic",system-ui,-apple-system,sans-serif;
+  --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+body{margin:0;font-family:var(--sans);color:var(--ink);font-size:10.4pt;line-height:1.68;background:var(--paper)}
+h1,h2,h3,h4{line-height:1.3;margin:0;text-wrap:balance}
+p{margin:0 0 .62em}
+a{color:var(--blue-ink);text-decoration:none}
+strong{font-weight:700}
+code{font-family:var(--mono);font-size:.9em;background:var(--soft);border:1px solid var(--line2);border-radius:3px;padding:.5px 4px}
+.num{font-variant-numeric:tabular-nums}
+
+/* ── 표지 ─────────────────────────────── */
+.cover{height:262mm;display:flex;flex-direction:column;page-break-after:always}
+.cover .tag{font-size:10pt;letter-spacing:.16em;color:var(--blue);font-weight:700}
+.cover h1{font-size:31pt;font-weight:800;letter-spacing:-.6pt;margin:14mm 0 5mm}
+.cover .sub{font-size:13pt;color:var(--ink2);max-width:135mm;line-height:1.6}
+.cover .rule{height:5px;width:56mm;background:var(--blue);margin:9mm 0 8mm;border-radius:3px}
+.cover .meta{margin-top:auto;border-top:1px solid var(--line);padding-top:6mm;
+  display:grid;grid-template-columns:repeat(2,1fr);gap:5mm 10mm;font-size:9.6pt}
+.cover .meta dt{color:var(--ink3);font-size:8.6pt;letter-spacing:.05em;margin-bottom:1.5mm}
+.cover .meta dd{margin:0;font-weight:600}
+.cover .shot{margin:10mm 0 0;border:1px solid var(--line);border-radius:8px;overflow:hidden;box-shadow:0 3px 14px rgba(0,0,0,.09)}
+.cover .shot img{display:block;width:100%}
+
+/* ── 공통 ─────────────────────────────── */
+.page{page-break-before:always}
+section{page-break-inside:auto}
+h2.sec{font-size:19pt;font-weight:800;letter-spacing:-.3pt;padding-bottom:3mm;border-bottom:2.5px solid var(--ink);margin:0 0 5mm}
+h2.sec .no{color:var(--blue);margin-right:3mm}
+h3{font-size:12.4pt;font-weight:700;margin:7mm 0 2.5mm;padding-left:3mm;border-left:4px solid var(--blue)}
+h4{font-size:10.8pt;font-weight:700;margin:5mm 0 1.5mm;color:var(--ink)}
+.lead{color:var(--ink2);font-size:10.8pt;margin-bottom:4mm}
+
+figure{margin:4mm 0 3mm;page-break-inside:avoid}
+figure img{display:block;width:100%;border:1px solid var(--line);border-radius:7px}
+figcaption{font-size:8.8pt;color:var(--ink3);margin-top:1.8mm;text-align:center}
+
+/* 번호 설명 목록 — 스크린샷의 빨간 배지와 대응 */
+ol.legend{list-style:none;counter-reset:lg;margin:3.5mm 0 0;padding:0}
+ol.legend li{counter-increment:lg;position:relative;padding:0 0 2.6mm 9.5mm;font-size:10pt}
+ol.legend li::before{content:counter(lg);position:absolute;left:0;top:.4mm;width:6mm;height:6mm;border-radius:50%;
+  background:var(--red);color:#fff;font-size:8.4pt;font-weight:700;text-align:center;line-height:6mm}
+ol.legend b{font-weight:700}
+
+/* 실습 박스 */
+.try{border:1.5px solid var(--blue);border-radius:8px;background:var(--blue-soft);padding:4mm 5mm;margin:5mm 0;page-break-inside:avoid}
+.try h4{margin:0 0 2mm;color:var(--blue-ink);font-size:10.6pt;display:flex;align-items:center;gap:2mm}
+.try h4::before{content:"직접 해보기";background:var(--blue);color:#fff;font-size:8pt;font-weight:700;
+  padding:1mm 2.5mm;border-radius:3px;letter-spacing:.03em}
+.try ol{margin:0;padding-left:5mm}
+.try li{margin-bottom:1.4mm}
+.try .ask{margin-top:2.5mm;padding-top:2.5mm;border-top:1px dashed rgba(26,115,232,.4);font-size:9.6pt;color:var(--blue-ink)}
+.try .ask b{font-weight:700}
+
+.note{border-left:4px solid var(--amber);background:var(--amber-soft);padding:3mm 4mm;margin:4mm 0;font-size:9.8pt;border-radius:0 6px 6px 0}
+.note b{color:var(--amber)}
+.key{border-left:4px solid var(--green);background:var(--green-soft);padding:3mm 4mm;margin:4mm 0;font-size:9.8pt;border-radius:0 6px 6px 0}
+.key b{color:var(--green)}
+
+table{width:100%;border-collapse:collapse;font-size:9.4pt;margin:3.5mm 0;page-break-inside:avoid}
+th,td{border-bottom:1px solid var(--line2);padding:2.1mm 2.6mm;text-align:left;vertical-align:top}
+th{background:var(--soft);font-weight:700;font-size:8.8pt;color:var(--ink2);border-bottom:1.5px solid var(--line)}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+tbody tr:last-child td{border-bottom:1px solid var(--line)}
+
+ul.plain{margin:2mm 0 3mm;padding-left:5mm}
+ul.plain li{margin-bottom:1.4mm}
+
+.toc{columns:1;font-size:10.2pt}
+.toc ol{list-style:none;counter-reset:t;margin:0;padding:0}
+.toc li{counter-increment:t;display:flex;gap:3mm;padding:1.9mm 0;border-bottom:1px dotted var(--line)}
+.toc li .t{flex:1}
+.toc li .n{color:var(--blue);font-weight:700;min-width:9mm}
+.toc li .d{color:var(--ink3);font-size:9pt}
+
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:4mm}
+.chip{display:inline-block;background:var(--soft);border:1px solid var(--line);border-radius:12px;
+  padding:.6mm 2.6mm;font-size:8.8pt;margin:0 1mm 1mm 0}
+.sev-h{color:var(--red);font-weight:700}
+.sev-m{color:var(--amber);font-weight:700}
+.sev-l{color:var(--ink3);font-weight:700}
+</style>
+</head>
+<body>
+
+<!-- ══════════ 표지 ══════════ -->
+<div class="cover">
+  <div class="tag">퍼포먼스 마케팅 실습</div>
+  <h1>Google Ads<br>검색·디스플레이 광고 실습 가이드</h1>
+  <div class="rule"></div>
+  <p class="sub">내 브랜드 정보를 넣고, 캠페인을 만들어 게재하고, 결과를 읽고,
+    무엇이 잘못됐는지 찾아 고친 뒤 다시 게재해 성과가 나아졌는지 확인합니다.
+    실제 광고비는 한 푼도 쓰지 않습니다.</p>
+  <figure class="shot"><img src="shots/17-diagnostics.png" alt="결과 진단 화면"></figure>
+  <dl class="meta">
+    <div><dt>실습 도구</dt><dd>redskio.github.io/google-ads-search-sim</dd></div>
+    <div><dt>소요 시간</dt><dd>90 ~ 120분</dd></div>
+    <div><dt>준비물</dt><dd>노트북, 최신 브라우저</dd></div>
+    <div><dt>사전 지식</dt><dd>필요 없음</dd></div>
+  </dl>
+</div>
+
+<!-- ══════════ 목차 ══════════ -->
+<section class="page">
+  <h2 class="sec">이 실습에 대하여</h2>
+  <p class="lead">광고를 글로만 배우면 "확장검색은 도달이 넓다" 같은 문장만 남습니다.
+    이 실습은 직접 설정을 바꾸고 그 결과를 숫자로 마주하는 방식입니다.</p>
+
+  <h3>무엇을 할 수 있게 되나</h3>
+  <ul class="plain">
+    <li>내 사업에 맞는 <b>캠페인 목표와 전환 액션</b>을 스스로 정의할 수 있다.</li>
+    <li>키워드의 <b>검색유형</b>을 골라 도달과 정확도를 조절할 수 있다.</li>
+    <li>검색어 보고서를 읽고 <b>새는 돈을 찾아 막을</b> 수 있다.</li>
+    <li>성과가 나쁠 때 <b>도달·클릭·전환 중 어디가 문제인지</b> 짚어낼 수 있다.</li>
+    <li>보고서를 내려받아 <b>근거를 갖고 설명</b>할 수 있다.</li>
+  </ul>
+
+  <h3>실습에 쓸 예시 브랜드</h3>
+  <p>가이드는 <b>홈핏</b>이라는 가상의 브랜드로 설명합니다. 본인 브랜드나 관심 있는 브랜드로 바꿔서 해도 됩니다.
+    오히려 그 편이 배우는 게 많습니다.</p>
+  <table>
+    <tr><th style="width:26mm">업체 이름</th><td>홈핏</td></tr>
+    <tr><th>업종</th><td>헬스 · 피트니스</td></tr>
+    <tr><th>상품</th><td>집에서 하는 20분 홈트레이닝 온라인 클래스 (월 39,000원 구독)</td></tr>
+    <tr><th>타겟 고객</th><td>헬스장 갈 시간이 없는 20~40대 직장인</td></tr>
+    <tr><th>실습 목표</th><td>30일간 구독 신청 40건, 전환당비용 25,000원 이하, 총예산 120만원</td></tr>
+  </table>
+
+  <div class="note"><b>중요</b> — 이 도구는 시뮬레이션입니다. 숫자는 실제 시장 구조를 본떠 만든 것이지
+    특정 업체의 실제 성과가 아닙니다. 배우는 것은 <b>숫자 자체가 아니라 인과관계</b>입니다.</div>
+
+  <h3>목차</h3>
+  <div class="toc">
+    <ol>
+      <li><span class="n">0</span><span class="t">화면 구조 익히기</span><span class="d">5분</span></li>
+      <li><span class="n">1</span><span class="t">비즈니스 정보 입력 — 시뮬레이션의 기준값</span><span class="d">10분</span></li>
+      <li><span class="n">2</span><span class="t">전환 액션 정의 — 무엇이 성공인가</span><span class="d">10분</span></li>
+      <li><span class="n">3</span><span class="t">첫 캠페인 만들기 (9단계 마법사)</span><span class="d">30분</span></li>
+      <li><span class="n">4</span><span class="t">결과 읽기 — 진단·지표·추이</span><span class="d">15분</span></li>
+      <li><span class="n">5</span><span class="t">광고그룹과 키워드 실적 보기</span><span class="d">10분</span></li>
+      <li><span class="n">6</span><span class="t">검색어 보고서 → 제외 키워드 → 재게재 루프</span><span class="d">20분</span></li>
+      <li><span class="n">7</span><span class="t">디스플레이 캠페인과 게재위치 제외</span><span class="d">15분</span></li>
+      <li><span class="n">8</span><span class="t">보고서 내려받기</span><span class="d">5분</span></li>
+      <li><span class="n">A</span><span class="t">부록 · 실습 과제 6종</span><span class="d">—</span></li>
+      <li><span class="n">B</span><span class="t">부록 · 지표 사전</span><span class="d">—</span></li>
+      <li><span class="n">C</span><span class="t">부록 · 강사용 운영 노트</span><span class="d">—</span></li>
+    </ol>
+  </div>
+</section>
+
+<!-- ══════════ 0 ══════════ -->
+<section class="page">
+  <h2 class="sec"><span class="no">0</span>화면 구조 익히기</h2>
+  <p class="lead">실제 Google Ads와 같은 구조입니다. 여기서 익힌 위치 감각이 실무에서 그대로 통합니다.</p>
+
+  <figure><img src="shots/01-overview-empty.png" alt="첫 화면"></figure>
+  <ol class="legend">
+    <li><b>주요 메뉴 레일</b> — 만들기 · 캠페인 · 목표 · 도구 · 결제 · 관리. 실제 Google Ads와 같은 6개입니다.
+      실습에서는 <b>만들기</b>와 <b>캠페인</b>, <b>목표</b>를 씁니다.</li>
+    <li><b>세부 메뉴</b> — 왼쪽 레일에서 고른 영역의 하위 화면들이 여기 나옵니다.
+      캠페인을 게재하면 광고그룹·키워드·검색어·제외 키워드·게재위치 항목이 채워집니다.</li>
+    <li><b>실습 체크리스트</b> — 무엇을 먼저 해야 하는지 순서대로 보여줍니다. 위에서부터 하나씩 하면 됩니다.</li>
+    <li><b>초기화</b> — 실습 데이터를 모두 지우고 처음부터 다시 시작합니다.
+      여러 번 반복 실습할 때 씁니다. 옆의 <b>테마</b>는 밝게/어둡게 전환입니다.</li>
+  </ol>
+
+  <div class="key"><b>기억할 것</b> — 진행 상황은 <b>내 브라우저에만</b> 저장됩니다.
+    서버로 올라가지 않으니 마음껏 망쳐도 됩니다. 다만 브라우저 데이터를 지우면 실습도 사라집니다.</div>
+</section>
+
+<!-- ══════════ 1 ══════════ -->
+<section class="page">
+  <h2 class="sec"><span class="no">1</span>비즈니스 정보 입력</h2>
+  <p class="lead">여기 입력한 내용이 시뮬레이션의 <b>기준값</b>이 됩니다.
+    같은 캠페인이라도 업종이 다르면 단가가 다르고, 설명이 부실하면 키워드 적합도가 떨어집니다.</p>
+
+  <figure><img src="shots/02-business-empty.png" alt="비즈니스 정보 입력 화면"></figure>
+  <ol class="legend">
+    <li><b>업체 이름</b> — 광고문구에 이 이름을 넣으면 클릭률이 오릅니다.
+      또 이 이름이 들어간 키워드는 <b>브랜드 검색</b>으로 분류되어 훨씬 싸고 잘 전환됩니다.</li>
+    <li><b>업종</b> — 가장 큰 영향을 줍니다. 시장 클릭당비용, 경쟁 강도, 기기·시간대 분포,
+      그리고 "우리 고객이 아닌 검색" 후보가 모두 업종에서 결정됩니다.
+      금융은 교육보다 클릭이 <b>2배 이상</b> 비쌉니다.</li>
+    <li><b>상품 유형</b> — 구독 / 단건 판매 / 상담 신청 / 예약. 전환의 성격과 고객 1명의 가치가 달라집니다.</li>
+    <li><b>객단가</b> — 전환 1건의 값. ROAS(광고비 대비 매출) 계산의 기준입니다.</li>
+  </ol>
+
+  <figure><img src="shots/03-business-filled.png" alt="비즈니스 정보 아래쪽"></figure>
+  <ol class="legend">
+    <li><b>비즈니스 설명</b> — 여기 쓴 <b>단어</b>가 키워드 적합도 판정의 사전이 됩니다.
+      "판매" 한 단어만 쓰면 대부분의 키워드가 "관련 약함"으로 나옵니다.
+      무엇을, 누구에게, 어떤 점이 다른지 2~3문장으로 쓰세요.</li>
+    <li><b>우리 고객이 아닌 검색</b> — 업종 기본값에 <b>더해집니다</b>.
+      여기 적은 표현이 들어간 검색어는 "무관"으로 분류되어 낭비 비용으로 집계됩니다.</li>
+    <li><b>실습 목표</b> — 채점 기준입니다. 목표 전환수와 목표 전환당비용을 기준으로 점수가 매겨집니다.
+      캠페인 설정의 <b>타겟 CPA와는 별개</b>입니다.</li>
+  </ol>
+
+  <div class="try">
+    <h4></h4>
+    <ol>
+      <li><b>비즈니스 정보</b> 화면에서 <b>예시로 채우기</b>를 눌러 홈핏 정보를 넣고 저장하세요.</li>
+      <li>저장한 뒤 업종만 <b>금융 · 보험</b>으로 바꿔 다시 저장해 보세요.</li>
+      <li>다시 <b>헬스 · 피트니스</b>로 되돌립니다.</li>
+    </ol>
+    <div class="ask"><b>생각해 볼 것</b> — 업종을 바꾸면 왜 클릭당비용이 달라질까요?
+      실제 광고 시장에서 금융 키워드가 비싼 이유는 무엇일까요?</div>
+  </div>
+</section>
+
+<!-- ══════════ 2 ══════════ -->
+<section class="page">
+  <h2 class="sec"><span class="no">2</span>전환 액션 정의</h2>
+  <p class="lead">광고에서 가장 많이 틀리는 지점입니다. <b>전환은 자동으로 정해지지 않습니다.</b>
+    "무엇이 일어나면 성공인가"를 광고주가 직접 정해야 하고, 그 정의가 모든 숫자를 바꿉니다.</p>
+
+  <figure><img src="shots/04-conversions.png" alt="전환 액션 설정"></figure>
+  <ol class="legend">
+    <li><b>전환 액션 이름</b> — 보고서의 열 제목으로 그대로 쓰입니다. "구독 신청", "상담 신청"처럼 구체적으로.</li>
+    <li><b>카테고리</b> — 가장 중요합니다. 구매·구독 신청처럼 <b>돈이 오가는 시점</b>으로 잡을지,
+      장바구니 담기·페이지 조회처럼 <b>쉬운 행동</b>으로 잡을지에 따라 전환수가 10배까지 차이 납니다.</li>
+    <li><b>횟수</b> — 한 사람이 여러 번 해도 1번만 셀지, 매번 셀지.
+      리드·가입은 1회, 반복 구매가 있는 쇼핑몰은 모든 횟수가 맞습니다.</li>
+    <li><b>전환 추적 기간</b> — 클릭 후 며칠 안에 일어난 전환까지 인정할지.
+      고민이 긴 상품(B2B·금융)에서 기간이 짧으면 성과를 놓칩니다.</li>
+    <li><b>이 전환 액션 사용</b> — 끄면 전환이 전혀 측정되지 않습니다. 일부러 꺼서 확인해 보세요.</li>
+    <li><b>'전환수' 열에 포함</b> — 끄면 관찰만 하고 자동 입찰이 최적화 대상으로 쓰지 않습니다.</li>
+  </ol>
+
+  <figure><img src="shots/05-conversion-categories.png" alt="전환 카테고리 비교"></figure>
+  <p>화면 아래 표는 카테고리별 전환 빈도를 보여줍니다.
+    <b>페이지 조회</b>는 구매 대비 9배 자주 일어납니다. 전환수가 9배로 보이지만 매출은 그대로입니다.</p>
+
+  <div class="key"><b>핵심</b> — 쉬운 전환을 고르면 보고서 숫자는 예뻐지지만
+    자동 입찰이 <b>잘못된 신호를 향해</b> 최적화됩니다. 결국 돈은 더 쓰고 매출은 그대로입니다.</div>
+
+  <div class="try">
+    <h4></h4>
+    <ol>
+      <li>전환 카테고리를 <b>구독 신청</b>으로 두고 저장합니다.</li>
+      <li>나중에 캠페인을 게재한 뒤, 카테고리만 <b>페이지 조회</b>로 바꿔 저장해 보세요.
+        (기존 캠페인 성과가 새 기준으로 다시 집계됩니다.)</li>
+      <li>전환수와 전환당비용이 어떻게 달라지는지 적어 두세요.</li>
+    </ol>
+    <div class="ask"><b>생각해 볼 것</b> — 전환수가 늘었는데 회사 매출은 그대로라면,
+      그 보고서를 대표에게 어떻게 설명해야 할까요?</div>
+  </div>
+</section>
+
+<!-- ══════════ 3 ══════════ -->
+<section class="page">
+  <h2 class="sec"><span class="no">3</span>첫 캠페인 만들기</h2>
+  <p class="lead">왼쪽 위 <b>＋ 만들기</b> 버튼을 누르면 9단계 마법사가 열립니다.
+    실제 Google Ads와 같은 순서입니다.</p>
+
+  <h3>3-1 · 캠페인 목표</h3>
+  <figure><img src="shots/06-wizard-goal.png" alt="캠페인 목표 선택"></figure>
+  <ol class="legend">
+    <li><b>단계 표시</b> — 지금 어디쯤인지. 지나온 단계를 눌러 되돌아갈 수 있습니다.</li>
+    <li><b>판매</b> — 구매·구독처럼 돈이 오가는 행동이 목적일 때.</li>
+    <li><b>리드</b> — 상담 신청·문의처럼 연락처를 받는 것이 목적일 때. 전환은 더 자주 일어나지만 1건의 가치는 낮습니다.</li>
+  </ol>
+  <p>목표에 따라 기본 전환율이 달라집니다. 홈핏은 구독 상품이므로 <b>판매</b>를 고릅니다.</p>
+
+  <h3>3-2 · 캠페인 유형</h3>
+  <figure><img src="shots/07-wizard-type.png" alt="캠페인 유형 선택"></figure>
+  <ol class="legend">
+    <li><b>검색</b> — 이미 찾고 있는 사람에게 보여줍니다. 의도가 명확해 전환율이 가장 높습니다. 먼저 이것부터 합니다.</li>
+    <li><b>디스플레이</b> — 아직 찾고 있지 않은 사람에게 배너를 보여줍니다.
+      도달이 넓고 클릭이 싸지만 전환율은 훨씬 낮습니다. 7장에서 다룹니다.</li>
+  </ol>
+</section>
+
+<section class="page">
+  <h3>3-3 · 캠페인 설정</h3>
+  <figure><img src="shots/08-wizard-settings.png" alt="캠페인 설정"></figure>
+  <ol class="legend">
+    <li><b>캠페인 이름</b> — 나중에 여러 캠페인을 비교할 때 구분되도록 씁니다. "홈트 검색 1차"처럼.</li>
+    <li><b>위치</b> — 실제로 상품을 제공할 수 있는 지역만 고릅니다.
+      "전 세계"를 고르면 노출은 늘지만 전환되지 않는 클릭에 돈을 씁니다.</li>
+    <li><b>언어</b> — 사이트가 지원하는 언어와 맞춰야 합니다.</li>
+    <li><b>전환 추적 사용</b> — 실습에서 한 번은 꺼 보세요. 비용만 쓰고 성과를 알 수 없는 상태가 어떤 것인지 체감됩니다.</li>
+  </ol>
+
+  <h3>3-4 · 예산 및 입찰</h3>
+  <figure><img src="shots/09-wizard-budget.png" alt="예산 및 입찰"></figure>
+  <ol class="legend">
+    <li><b>일일 예산</b> — 하루에 쓸 금액. 아래에 30일 기준 총액과 실습 총예산 대비가 표시됩니다.</li>
+    <li><b>클릭수 최대화</b> — 예산 안에서 클릭이 가장 많아지도록 자동 입찰합니다. 처음 시작할 때 무난합니다.</li>
+    <li><b>타겟 CPA</b> — 전환당비용 목표를 정하면 시스템이 거기 맞춰 입찰합니다.
+      전환 데이터가 쌓인 뒤에 쓰는 전략입니다.</li>
+  </ol>
+  <table>
+    <tr><th style="width:32mm">입찰 전략</th><th>언제 쓰나</th><th class="n" style="width:20mm">학습 기간</th></tr>
+    <tr><td>수동 CPC</td><td>키워드마다 직접 통제하고 싶을 때</td><td class="n">없음</td></tr>
+    <tr><td>클릭수 최대화</td><td>트래픽을 빨리 모아야 할 때</td><td class="n">3일</td></tr>
+    <tr><td>전환수 최대화</td><td>전환 데이터가 충분히 쌓였을 때</td><td class="n">7일</td></tr>
+    <tr><td>타겟 CPA</td><td>전환당비용을 일정하게 관리할 때</td><td class="n">7일</td></tr>
+  </table>
+  <div class="note"><b>학습 기간</b> — 자동 입찰은 데이터를 모으는 동안 일부러 다양한 입찰을 시도합니다.
+    이 기간 성과가 낮은 건 <b>정상</b>입니다. 중간에 설정을 바꾸면 학습이 처음부터 다시 시작됩니다.</div>
+</section>
+
+<section class="page">
+  <h3>3-5 · 타겟 CPA를 골랐다면</h3>
+  <figure><img src="shots/10-wizard-targetcpa.png" alt="타겟 CPA 설정"></figure>
+  <ol class="legend">
+    <li><b>타겟 CPA 직접 입력</b> — 값은 여러분이 정합니다. 낮게 잡을수록 전환당비용은 싸지지만 노출량이 줄어듭니다.</li>
+    <li><b>권장 범위</b> — 이 업종·목표에서 현실적으로 달성 가능한 범위를 계산해 보여줍니다.
+      버튼을 눌러 바로 적용할 수 있습니다.</li>
+  </ol>
+  <div class="note"><b>흔한 실수</b> — 목표가 25,000원이라고 타겟 CPA에도 25,000원을 넣으면,
+    시장가보다 너무 낮아 <b>입찰 자체를 포기</b>해 노출이 거의 안 나옵니다.
+    성과가 나쁜 게 아니라 경매에 참여를 못 한 것입니다. 처음에는 권장값으로 시작해 데이터를 쌓은 뒤 조금씩 낮추세요.</div>
+
+  <h3>3-6 · 입찰 조정</h3>
+  <figure><img src="shots/11-wizard-bidadj.png" alt="입찰 조정"></figure>
+  <ol class="legend">
+    <li><b>기기별 조정</b> — 각 기기의 실제 트래픽 비중이 옆에 표시됩니다.
+      B2B는 컴퓨터가 69%, 지역 서비스는 휴대전화가 86%로 업종마다 완전히 다릅니다.</li>
+    <li><b>시간대별 조정</b> — 새벽·오전·오후·저녁 네 구간. 아래로는 -90%, 위로는 +300%까지.</li>
+  </ol>
+  <p>처음에는 조정하지 않고 게재해도 됩니다. 결과를 본 뒤 <b>어느 기기·시간대의 전환당비용이 나쁜지</b>
+    확인하고 나서 조정하는 것이 순서입니다.</p>
+</section>
+
+<section class="page">
+  <h3>3-7 · 광고그룹 및 키워드</h3>
+  <figure><img src="shots/12-wizard-groups.png" alt="광고그룹과 키워드"></figure>
+  <ol class="legend">
+    <li><b>광고그룹 이름</b> — 키워드 주제를 그대로 씁니다. "홈트 클래스", "집에서 하는 운동"처럼.</li>
+    <li><b>키워드 입력</b> — 한 줄에 하나씩. 실제 Google Ads와 같은 기호를 씁니다.</li>
+    <li><b>키워드 진단</b> — 입력하는 즉시 검색량·경쟁·시장 단가·판정이 나옵니다.</li>
+  </ol>
+  <table>
+    <tr><th style="width:30mm">입력 방식</th><th style="width:24mm">검색유형</th><th>어떤 검색에 노출되나</th></tr>
+    <tr><td><code>홈트</code></td><td>확장검색</td><td>관련 있다고 판단되는 넓은 범위. 무관한 검색도 많이 들어옵니다.</td></tr>
+    <tr><td><code>"홈트"</code></td><td>구문검색</td><td>그 표현이 순서대로 들어간 검색.</td></tr>
+    <tr><td><code>[홈트]</code></td><td>일치검색</td><td>거의 그 표현 그대로인 검색만.</td></tr>
+  </table>
+
+  <figure><img src="shots/13-wizard-keyword-diag.png" alt="키워드 진단 표"></figure>
+  <ol class="legend">
+    <li><b>판정</b> — 내 비즈니스 정보를 기준으로 각 키워드를 평가합니다.
+      <span class="chip">브랜드 검색</span> 싸고 잘 전환되지만 물량이 적음
+      <span class="chip">적합</span> 우리 사업 언어와 잘 맞음
+      <span class="chip">관련 약함</span> 연결이 느슨함
+      <span class="chip">고객 아님</span> 클릭은 나와도 전환되지 않음</li>
+  </ol>
+
+  <div class="key"><b>광고그룹을 나누는 이유</b> — 광고그룹마다 <b>다른 광고문구</b>를 쓸 수 있습니다.
+    키워드 3개를 한 그룹에 몰면 어느 키워드에도 딱 맞지 않는 광고가 되고 품질평가점수가 떨어집니다.
+    주제별로 나누면 같은 키워드로도 점수가 <b>5.5점 → 9.0점</b>까지 올라갑니다.</div>
+</section>
+
+<section class="page">
+  <h3>3-8 · 광고 만들기</h3>
+  <figure><img src="shots/14-wizard-ad.png" alt="광고 만들기"></figure>
+  <ol class="legend">
+    <li><b>광고그룹 탭</b> — 그룹마다 별도의 광고를 씁니다. 탭을 눌러 오갑니다.</li>
+    <li><b>최종 URL</b> — 클릭한 사람이 도착할 페이지.
+      비즈니스 도메인과 다르면 방문 페이지 점수가 떨어지고 <b>전환이 무너집니다</b>.</li>
+    <li><b>제목</b> — 최대 15개. 8개 이상을 권장합니다.
+      <b>그 광고그룹의 키워드를 제목에 그대로 넣으세요.</b> 이게 품질평가점수를 가장 크게 좌우합니다.</li>
+  </ol>
+
+  <figure><img src="shots/14b-wizard-ad-preview.png" alt="광고 미리보기"></figure>
+  <ol class="legend">
+    <li><b>미리보기</b> — 검색 결과에 실제로 어떻게 보이는지. 제목 3개와 설명 2개가 조합되어 나갑니다.</li>
+  </ol>
+  <div class="note"><b>문구가 성과를 가르는 방식</b> — 광고에 <b>가격·조건</b>을 밝히면 클릭은 줄지만
+    클릭한 사람의 구매 의사는 높습니다. 반대로 <b>"무료·경품"</b>을 앞세우면 클릭은 몰리는데 전환은 안 됩니다.
+    클릭이 많은 것이 항상 좋은 게 아닙니다.</div>
+
+  <h3>3-9 · 제외 키워드</h3>
+  <figure><img src="shots/15-wizard-negatives.png" alt="제외 키워드"></figure>
+  <ol class="legend">
+    <li><b>제외 키워드 입력</b> — 여기 적은 표현이 들어간 검색어에는 광고가 나가지 않습니다.</li>
+    <li><b>업종별 추천</b> — 이 업종에서 흔히 제외하는 표현입니다. 눌러서 바로 추가할 수 있습니다.</li>
+  </ol>
+  <p>처음에는 비워 두고 게재해도 됩니다. <b>6장에서 검색어 보고서를 보고 채우는 것이 진짜 실습</b>입니다.</p>
+  <div class="note"><b>주의</b> — 제외 키워드를 너무 넓게 잡으면 <b>내 키워드까지 막습니다</b>.
+    확장 제외(<code>무료</code>)는 그 단어가 들어가기만 하면 전부 차단합니다.
+    정확히 하나만 막으려면 일치 제외(<code>[무료]</code>)를 쓰세요.</div>
+</section>
+
+<section class="page">
+  <h3>3-10 · 검토 및 게재</h3>
+  <figure><img src="shots/16-wizard-review.png" alt="검토 및 게재"></figure>
+  <ol class="legend">
+    <li><b>설정 요약</b> — 지금까지 정한 것 전체. 게재 전 마지막으로 확인합니다.</li>
+    <li><b>게재 전 확인</b> — 문제가 될 만한 설정을 미리 알려줍니다.
+      다만 <b>일부러 무시하고 게재해 결과를 보는 것도 좋은 실습</b>입니다.</li>
+  </ol>
+
+  <div class="try">
+    <h4></h4>
+    <ol>
+      <li>아래 설정으로 첫 캠페인을 만들고 <b>게재</b>하세요.
+        <br>· 목표 <b>판매</b> / 유형 <b>검색</b> / 이름 <b>홈트 검색 1차</b>
+        <br>· 일일 예산 <b>45,000원</b> / <b>클릭수 최대화</b>
+        <br>· 광고그룹 1 <b>홈트 클래스</b> — <code>홈트레이닝 클래스</code>, <code>홈트 온라인 강의</code> (둘 다 확장검색)
+        <br>· 광고그룹 2 <b>집에서 하는 운동</b> — <code>"집에서 하는 운동"</code>
+        <br>· 제외 키워드는 <b>비워 둡니다</b></li>
+      <li>각 광고그룹의 제목에 <b>그 그룹의 키워드를 그대로</b> 넣으세요.</li>
+    </ol>
+    <div class="ask"><b>왜 제외 키워드를 비워 두나</b> — 6장에서 낭비를 직접 발견하고 막는 과정을
+      체험하기 위해서입니다. 처음부터 막아 두면 무엇을 막았는지 알 수 없습니다.</div>
+  </div>
+</section>
+
+<!-- ══════════ 4 ══════════ -->
+<section class="page">
+  <h2 class="sec"><span class="no">4</span>결과 읽기</h2>
+  <p class="lead">게재하면 30일치 성과가 즉시 시뮬레이션되고 <b>진단</b> 화면으로 이동합니다.</p>
+
+  <figure><img src="shots/17-diagnostics.png" alt="진단 화면"></figure>
+  <ol class="legend">
+    <li><b>점수와 판정</b> — 목표 대비 100점 만점. 전환수 45점 + 전환당비용 35점 + 효율 20점으로 구성됩니다.
+      60점 이상이면 합격입니다.</li>
+    <li><b>핵심 지표</b> — 노출수·클릭수·평균 CPC·비용·전환수·전환당비용·전환율·ROAS.
+      목표 미달 항목은 <b>빨간색</b>으로 표시됩니다.</li>
+    <li><b>진단</b> — 심각도 순으로 정렬됩니다. 각 항목은 <b>문제 → 왜 그런가 → 근거 숫자 → 조치</b> 순서입니다.</li>
+  </ol>
+
+  <figure><img src="shots/18-diagnostics-detail.png" alt="진단 상세"></figure>
+  <ol class="legend">
+    <li><b>조치</b> — 무엇을 어떻게 바꿀지 구체적으로 알려줍니다. 이 문장 그대로 따라 하면 개선됩니다.</li>
+  </ol>
+
+  <h3>성과가 나쁠 때 어디를 보나</h3>
+  <p>광고는 <b>노출 → 클릭 → 전환</b> 세 단계입니다. 어느 단계가 고장 났는지부터 가려야 합니다.</p>
+  <table>
+    <tr><th style="width:26mm">증상</th><th>확인할 지표</th><th>흔한 원인</th></tr>
+    <tr><td><b>노출이 안 나옴</b></td><td>노출 점유율, 노출 손실(예산/순위)</td>
+      <td>입찰가가 시장보다 낮음 · 예산 부족 · 타겟 CPA가 비현실적 · 키워드 검색량 자체가 적음</td></tr>
+    <tr><td><b>클릭이 안 됨</b></td><td>CTR, 품질평가점수 중 '광고 관련성'</td>
+      <td>광고문구에 키워드가 없음 · 제목이 적음 · 광고 확장 미사용 · 순위가 낮음</td></tr>
+    <tr><td><b>전환이 안 됨</b></td><td>전환율, 품질평가점수 중 '방문 페이지'</td>
+      <td>랜딩 페이지가 광고와 다름 · 무관한 검색어 유입 · 전환 추적 꺼짐 · 미끼성 문구</td></tr>
+  </table>
+  <div class="key"><b>가장 중요한 감각</b> — 노출과 클릭이 좋은데 전환만 없는 경우가 실무에서 가장 흔합니다.
+    이때 광고를 더 돌리는 건 답이 아닙니다. <b>검색어와 랜딩 페이지</b>를 봐야 합니다.</div>
+</section>
+
+<section class="page">
+  <h3>일별 추이 보기</h3>
+  <figure><img src="shots/19-overview-chart.png" alt="일별 실적 차트"></figure>
+  <ol class="legend">
+    <li><b>지표 전환</b> — 노출수·클릭수·비용·전환수를 바꿔 가며 봅니다.</li>
+    <li><b>일별 추이</b> — 왼쪽 파란 음영은 <b>자동 입찰 학습 기간</b>입니다. 이 구간 성과가 낮은 건 정상입니다.
+      세로 빨간 선은 <b>예산이 소진된 날</b>입니다.</li>
+  </ol>
+
+  <div class="note"><b>숫자를 너무 믿지 마세요</b> — 이 시뮬레이터는 확률 기반입니다.
+    전환이 12건 나왔다면 같은 품질의 캠페인이 <b>8건에서 17건 사이</b>로도 나옵니다.
+    2~3건 차이는 성과 차이가 아니라 <b>운</b>입니다. 실제 광고도 똑같습니다.</div>
+
+  <div class="try">
+    <h4></h4>
+    <ol>
+      <li>진단 화면에서 <b>심각도 높음</b> 항목을 모두 읽고, 각각 어느 단계(노출·클릭·전환)의 문제인지 분류하세요.</li>
+      <li>일별 추이에서 지표를 <b>비용</b>으로 바꿔 예산 소진일이 있는지 확인하세요.</li>
+      <li>가장 먼저 고쳐야 할 것 하나를 정하고 그 이유를 한 문장으로 쓰세요.</li>
+    </ol>
+  </div>
+</section>
+
+<!-- ══════════ 5 ══════════ -->
+<section class="page">
+  <h2 class="sec"><span class="no">5</span>광고그룹과 키워드 실적</h2>
+
+  <figure><img src="shots/20-adgroups.png" alt="광고그룹 실적"></figure>
+  <ol class="legend">
+    <li><b>평균 품질평가점수</b> — 그룹마다 다르게 매겨집니다.
+      점수가 낮은 그룹은 광고문구가 그 그룹의 키워드를 말하고 있지 않다는 뜻입니다.</li>
+  </ol>
+
+  <figure><img src="shots/21-keywords.png" alt="키워드 실적"></figure>
+  <ol class="legend">
+    <li><b>품질평가점수</b> — 1~10점. 높을수록 같은 순위를 <b>더 싸게</b> 얻습니다.</li>
+    <li><b>세 가지 구성요소</b> — 광고 관련성 / 예상 CTR / 방문 페이지 만족도.
+      어느 것이 "평균 미만"인지 보면 무엇을 고쳐야 할지 바로 알 수 있습니다.</li>
+    <li><b>광고그룹</b> — 이 키워드가 어느 그룹에 속하는지.</li>
+  </ol>
+
+  <table>
+    <tr><th style="width:34mm">구성요소</th><th>낮을 때 뜻</th><th>고치는 법</th></tr>
+    <tr><td>광고 관련성</td><td>광고문구에 이 키워드가 없다</td><td>제목에 키워드를 그대로 넣거나, 그룹을 쪼갠다</td></tr>
+    <tr><td>예상 CTR</td><td>클릭을 유도하는 요소가 부족하다</td><td>제목을 8개 이상으로, 사이트링크·콜아웃 추가</td></tr>
+    <tr><td>방문 페이지 만족도</td><td>도착 페이지가 검색 의도와 안 맞다</td><td>최종 URL을 그 키워드에 맞는 페이지로</td></tr>
+  </table>
+
+  <div class="key"><b>광고순위 = 입찰가 × 품질평가점수</b> — 점수가 낮으면 같은 순위를 얻는 데 더 많은 돈을 냅니다.
+    돈을 더 쓰는 대신 <b>점수를 올리는 것</b>이 훨씬 남는 장사입니다.</div>
+</section>
+
+<!-- ══════════ 6 ══════════ -->
+<section class="page">
+  <h2 class="sec"><span class="no">6</span>검색어 보고서 → 제외 → 재게재</h2>
+  <p class="lead">이 장이 실습의 핵심입니다. 검색 광고 운영의 8할은 이 반복 작업입니다.</p>
+
+  <figure><img src="shots/22-searchterms.png" alt="검색어 보고서"></figure>
+  <ol class="legend">
+    <li><b>낭비 경고</b> — 전체 비용 중 느슨하거나 무관한 검색어에 쓰인 비중.</li>
+    <li><b>비용은 어디로 갔는가</b> — 관련도별 비용 구성.
+      빨간 구간이 <b>우리 고객이 아닌 검색</b>에 쓴 돈입니다.</li>
+    <li><b>＋ 제외</b> — 각 검색어를 바로 제외 키워드로 보낼 수 있습니다.</li>
+  </ol>
+
+  <h4>키워드와 검색어는 다릅니다</h4>
+  <p><b>키워드</b>는 내가 등록한 것, <b>검색어</b>는 사용자가 실제로 친 것입니다.
+    확장검색을 쓰면 내가 등록하지 않은 검색어에도 광고가 나갑니다.
+    표의 <b>관련도</b> 열이 이걸 보여줍니다.</p>
+  <table>
+    <tr><th style="width:26mm">관련도</th><th>뜻</th><th>조치</th></tr>
+    <tr><td><span class="chip">정확 일치</span></td><td>등록한 키워드 그대로</td><td>유지</td></tr>
+    <tr><td><span class="chip">관련</span></td><td>의미가 이어지는 검색</td><td>대체로 유지</td></tr>
+    <tr><td><span class="chip">느슨함</span></td><td>연결이 약함</td><td>전환이 없으면 제외 검토</td></tr>
+    <tr><td><span class="chip">무관</span></td><td>우리 고객이 아님</td><td><b>바로 제외</b></td></tr>
+  </table>
+
+  <figure><img src="shots/23-searchterms-queued.png" alt="제외 대기 목록"></figure>
+  <ol class="legend">
+    <li><b>제외 키워드 적용해 다시 게재</b> — 대기 목록을 반영한 <b>새 캠페인</b>이 만들어집니다.
+      원래 캠페인은 그대로 남아 비교할 수 있습니다.</li>
+  </ol>
+</section>
+
+<section class="page">
+  <figure><img src="shots/24-negatives.png" alt="제외 키워드 화면"></figure>
+  <ol class="legend">
+    <li><b>추가 대기</b> — 아직 반영되지 않은 목록입니다.
+      실제 Google Ads와 마찬가지로 <b>설정을 바꿔도 이미 지난 성과는 바뀌지 않습니다</b>.
+      다시 게재해야 효과를 확인할 수 있습니다.</li>
+  </ol>
+
+  <figure><img src="shots/25-compare.png" alt="캠페인 비교"></figure>
+  <ol class="legend">
+    <li><b>나란히 보기</b> — 지표별로 어느 캠페인이 나은지 <span class="chip">우수</span> 표시가 붙습니다.</li>
+    <li><b>달라진 설정</b> — 두 캠페인 사이에 <b>실제로 다른 설정만</b> 뽑아 보여줍니다.
+      원인과 결과를 연결하는 데 이게 가장 중요합니다.</li>
+  </ol>
+
+  <div class="key"><b>실제 개선 예시</b> — 무관한 검색어 6개를 제외하자
+    낭비 비중 <b>41.4% → 21.9%</b>, 구독 신청 <b>14.3건 → 18.5건</b>,
+    전환당비용 <b>78,111원 → 65,468원</b>. 예산은 그대로입니다.</div>
+
+  <div class="try">
+    <h4></h4>
+    <ol>
+      <li>검색어 보고서에서 관련도가 <b>무관</b> 또는 <b>느슨함</b>인 검색어를 6개 골라 <b>＋ 제외</b>를 누르세요.</li>
+      <li><b>제외 키워드</b> 화면에서 <b>적용해 다시 게재</b>를 누릅니다.</li>
+      <li><b>캠페인 비교</b> 화면에서 무엇이 좋아졌는지 확인하세요.</li>
+      <li>한 번 더 반복하세요. 두 번째는 개선 폭이 어떤가요?</li>
+    </ol>
+    <div class="ask"><b>생각해 볼 것</b> — 제외 키워드를 계속 추가하면 언젠가 성과가 나빠지는 지점이 옵니다.
+      왜 그럴까요? (힌트: 제외 범위가 넓어지면 무엇까지 막히나요?)</div>
+  </div>
+</section>
+
+<!-- ══════════ 7 ══════════ -->
+<section class="page">
+  <h2 class="sec"><span class="no">7</span>디스플레이 캠페인</h2>
+  <p class="lead">검색은 <b>찾고 있는 사람</b>에게, 디스플레이는 <b>아직 찾고 있지 않은 사람</b>에게 보여줍니다.
+    지표를 읽는 법이 완전히 다릅니다.</p>
+
+  <figure><img src="shots/26-display-targeting.png" alt="디스플레이 타겟팅"></figure>
+  <ol class="legend">
+    <li><b>잠재고객</b> — 가장 넓게 도달합니다. 무관한 앱·사이트가 많이 섞입니다.</li>
+    <li><b>게재위치 직접 지정</b> — 내가 고른 곳에만. 정확하지만 물량이 적습니다.</li>
+    <li><b>노출 빈도 한도</b> — 같은 사람에게 하루 몇 번까지 보여줄지.
+      높이면 반응률이 빠르게 떨어집니다.</li>
+  </ol>
+
+  <figure><img src="shots/27-placements.png" alt="게재위치 보고서"></figure>
+  <ol class="legend">
+    <li><b>낭비 경고</b> — 디스플레이는 낭비 비중이 검색보다 훨씬 큽니다.</li>
+    <li><b>관련도</b> — 검색의 검색어 보고서와 같은 역할입니다.</li>
+    <li><b>제외</b> — 무관한 지면을 빼고 다시 게재합니다.</li>
+  </ol>
+
+  <div class="key"><b>디스플레이에서 가장 중요한 교훈</b> — 무관한 모바일 앱은 <b>클릭률이 오히려 높습니다</b>.
+    실수로 눌린 클릭이기 때문입니다.
+    <br>· 날씨 위젯 앱 — CTR <b>1.259%</b>, 전환 <b>0건</b>
+    <br>· 헬스 비교 사이트 — CTR <b>0.484%</b>, 전환 <b>0.9건</b>
+    <br>CTR만 보고 판단하면 정확히 거꾸로 갑니다.</div>
+
+  <div class="try">
+    <h4></h4>
+    <ol>
+      <li>디스플레이 캠페인을 하나 만들어 게재하세요. 타겟팅은 <b>잠재고객</b>, 빈도는 <b>3회</b>.</li>
+      <li><b>게재위치</b> 화면에서 관련도가 <b>무관</b>인 지면을 모두 제외하고 다시 게재하세요.</li>
+      <li>검색 캠페인과 디스플레이 캠페인의 <b>CTR·전환율·전환당비용</b>을 비교해 표로 정리하세요.</li>
+    </ol>
+    <div class="ask"><b>생각해 볼 것</b> — 디스플레이의 전환당비용이 검색보다 훨씬 비싸다면,
+      디스플레이는 쓸모없는 걸까요? 어떤 상황에서 디스플레이가 필요할까요?</div>
+  </div>
+</section>
+
+<!-- ══════════ 8 ══════════ -->
+<section class="page">
+  <h2 class="sec"><span class="no">8</span>보고서 내려받기</h2>
+
+  <figure><img src="shots/28-reports.png" alt="보고서 화면"></figure>
+  <ol class="legend">
+    <li><b>전체 보고서 ZIP으로 받기</b> — CSV 7종이 한 파일로 묶여 받아집니다.
+      브라우저가 여러 파일 동시 다운로드를 막기 때문에 ZIP으로 제공합니다.</li>
+    <li><b>미리보기</b> — 실제 Google Ads 다운로드와 같은 열 구성입니다.</li>
+  </ol>
+
+  <table>
+    <tr><th style="width:36mm">보고서</th><th>무엇을 보나</th></tr>
+    <tr><td>일별 실적</td><td>날짜별 노출·클릭·비용·전환. 예산 소진일과 학습 기간 표시 포함</td></tr>
+    <tr><td>키워드 실적</td><td>키워드별 품질평가점수 3요소와 성과</td></tr>
+    <tr><td>검색어 보고서</td><td>실제 검색어와 관련도. <b>제외 키워드 후보를 찾는 곳</b></td></tr>
+    <tr><td>광고그룹 실적</td><td>그룹별 평균 품질평가점수와 성과</td></tr>
+    <tr><td>게재위치 보고서</td><td>디스플레이 지면별 성과</td></tr>
+    <tr><td>기기 · 시간대</td><td>입찰 조정의 근거가 되는 분포</td></tr>
+    <tr><td>진단 리포트</td><td>발견된 문제·근거·조치 전체</td></tr>
+  </table>
+
+  <div class="note"><b>엑셀에서 한글이 깨진다면</b> — 이 CSV는 UTF-8 BOM으로 저장되어 있어
+    보통은 그냥 열립니다. 그래도 깨진다면 엑셀에서 <b>데이터 → 텍스트/CSV 가져오기</b>로
+    원본 파일 형식을 <b>UTF-8</b>로 지정해 여세요.</div>
+
+  <div class="try">
+    <h4></h4>
+    <ol>
+      <li>가장 성과가 좋았던 캠페인의 보고서를 <b>ZIP으로</b> 내려받으세요.</li>
+      <li>일별 실적 CSV를 엑셀로 열어 <b>전환당비용이 가장 낮은 날</b>과 <b>가장 높은 날</b>을 찾으세요.</li>
+      <li>그 차이가 설정 때문인지, 요일 때문인지, 그냥 운인지 판단해 보세요.</li>
+    </ol>
+  </div>
+</section>
+
+<!-- ══════════ 부록 A ══════════ -->
+<section class="page">
+  <h2 class="sec"><span class="no">A</span>부록 · 실습 과제 6종</h2>
+  <p class="lead">각 과제는 <b>설정 하나만</b> 바꾸고 나머지는 동일하게 두는 것이 원칙입니다.
+    그래야 원인을 특정할 수 있습니다.</p>
+
+  <h3>과제 1 · 검색유형 비교</h3>
+  <p>같은 키워드를 <b>모두 확장검색</b>으로 한 캠페인과 <b>모두 구문검색</b>으로 한 캠페인을 각각 게재하고 비교하세요.</p>
+  <p class="lead" style="font-size:9.6pt">기록할 것: 노출수 · CTR · 무관 비용 비중 · 전환당비용</p>
+
+  <h3>과제 2 · 광고그룹 분리 효과</h3>
+  <p>키워드 6개를 <b>한 그룹</b>에 넣은 캠페인과 <b>주제별 3그룹</b>으로 나눈 캠페인을 비교하세요.
+    나눈 쪽은 각 그룹의 광고 제목에 그 그룹의 키워드를 넣어야 합니다.</p>
+  <p class="lead" style="font-size:9.6pt">기록할 것: 그룹별 평균 품질평가점수 · 평균 CPC · 전환당비용</p>
+
+  <h3>과제 3 · 전환 정의 바꿔보기</h3>
+  <p>캠페인은 그대로 두고 <b>전환 카테고리</b>만 구독 신청 → 페이지 조회로 바꾸세요.</p>
+  <p class="lead" style="font-size:9.6pt">기록할 것: 전환수 · 전환당비용 · ROAS.
+    그리고 "이 보고서로 대표를 설득할 수 있는가?"에 답하세요.</p>
+
+  <h3>과제 4 · 망가뜨려 보기</h3>
+  <p>잘 만든 캠페인에서 <b>하나씩만</b> 망가뜨려 각각 어떤 지표가 무너지는지 확인하세요.</p>
+  <table>
+    <tr><th style="width:44mm">망가뜨릴 것</th><th>예상되는 증상</th></tr>
+    <tr><td>최종 URL을 다른 도메인으로</td><td>?</td></tr>
+    <tr><td>광고 제목을 키워드와 무관하게</td><td>?</td></tr>
+    <tr><td>일일 예산을 1/10로</td><td>?</td></tr>
+    <tr><td>전환 추적 끄기</td><td>?</td></tr>
+    <tr><td>위치를 전 세계로</td><td>?</td></tr>
+  </table>
+
+  <h3>과제 5 · 입찰 조정으로 개선하기</h3>
+  <p>기기·시간대 보고서를 보고 <b>전환당비용이 가장 나쁜 기기</b>의 입찰을 낮추고
+    <b>가장 좋은 기기</b>를 올려 다시 게재하세요.</p>
+
+  <h3>과제 6 · 목표 달성하기 (종합)</h3>
+  <p>지금까지 배운 것을 모두 써서 <b>실습 목표(구독 신청 40건, 전환당비용 25,000원 이하)</b>에
+    최대한 가깝게 만들어 보세요. 몇 차까지 갔는지, 각 차수에서 무엇을 바꿨는지 기록하세요.</p>
+</section>
+
+<!-- ══════════ 부록 B ══════════ -->
+<section class="page">
+  <h2 class="sec"><span class="no">B</span>부록 · 지표 사전</h2>
+  <table>
+    <tr><th style="width:34mm">지표</th><th>계산</th><th>읽는 법</th></tr>
+    <tr><td><b>노출수</b></td><td>광고가 보인 횟수</td><td>도달의 크기</td></tr>
+    <tr><td><b>노출 점유율</b></td><td>실제 노출 ÷ 노출 가능했던 총량</td><td>낮으면 입찰이나 예산이 부족하다</td></tr>
+    <tr><td><b>노출 손실(예산)</b></td><td>예산이 떨어져 못 나간 비중</td><td>높으면 예산을 올리거나 키워드를 줄인다</td></tr>
+    <tr><td><b>노출 손실(순위)</b></td><td>광고순위가 낮아 못 나간 비중</td><td>높으면 입찰가나 품질평가점수를 올린다</td></tr>
+    <tr><td><b>CTR</b></td><td>클릭수 ÷ 노출수</td><td>광고가 매력적인가. 검색 2~8%가 보통</td></tr>
+    <tr><td><b>평균 CPC</b></td><td>비용 ÷ 클릭수</td><td>클릭 1번의 값</td></tr>
+    <tr><td><b>전환율</b></td><td>전환수 ÷ 클릭수</td><td>온 사람이 실제로 행동했는가</td></tr>
+    <tr><td><b>전환당비용(CPA)</b></td><td>비용 ÷ 전환수</td><td>고객 1명 데려오는 값. <b>가장 중요</b></td></tr>
+    <tr><td><b>ROAS</b></td><td>매출 ÷ 광고비</td><td>1배면 본전. 광고비만 회수한 것</td></tr>
+    <tr><td><b>품질평가점수</b></td><td>1~10점</td><td>광고 관련성 + 예상 CTR + 방문 페이지</td></tr>
+    <tr><td><b>광고순위</b></td><td>입찰가 × 품질평가점수</td><td>순위를 정하는 값. 돈만으로 정해지지 않는다</td></tr>
+  </table>
+
+  <h3>자주 헷갈리는 것</h3>
+  <table>
+    <tr><th style="width:34mm">A</th><th style="width:34mm">B</th><th>차이</th></tr>
+    <tr><td>키워드</td><td>검색어</td><td>키워드는 내가 등록한 것, 검색어는 사용자가 실제로 친 것</td></tr>
+    <tr><td>타겟 CPA</td><td>목표 전환당비용</td><td>타겟 CPA는 입찰 설정, 목표는 채점 기준</td></tr>
+    <tr><td>제외 키워드</td><td>키워드 삭제</td><td>제외는 그 검색에 안 나가게 막는 것, 삭제는 입찰을 그만두는 것</td></tr>
+    <tr><td>CTR</td><td>전환율</td><td>CTR은 광고의 매력, 전환율은 페이지와 상품의 설득력</td></tr>
+  </table>
+</section>
+
+<!-- ══════════ 부록 C ══════════ -->
+<section class="page">
+  <h2 class="sec"><span class="no">C</span>부록 · 강사용 운영 노트</h2>
+
+  <h3>수업 진행 제안 (2시간)</h3>
+  <table>
+    <tr><th style="width:20mm">시간</th><th>내용</th></tr>
+    <tr><td class="n">0~15분</td><td>도구 접속, 비즈니스 정보 입력 (1장). 각자 다른 브랜드를 쓰게 하면 뒤에서 비교가 풍부해집니다.</td></tr>
+    <tr><td class="n">15~30분</td><td>전환 액션 정의 (2장). 카테고리 선택이 왜 중요한지 여기서 확실히 잡습니다.</td></tr>
+    <tr><td class="n">30~60분</td><td>첫 캠페인 게재 (3장). 제외 키워드는 비워 두게 합니다.</td></tr>
+    <tr><td class="n">60~75분</td><td>결과 읽기 (4~5장). 점수가 낮게 나오는 게 정상임을 먼저 말해 주세요.</td></tr>
+    <tr><td class="n">75~105분</td><td>제외 키워드 루프 (6장). <b>이 실습의 핵심</b>. 최소 2회 반복시킵니다.</td></tr>
+    <tr><td class="n">105~120분</td><td>디스플레이 (7장) + 보고서 다운로드 (8장) + 발표</td></tr>
+  </table>
+
+  <h3>점수 기준</h3>
+  <table>
+    <tr><th style="width:24mm">점수</th><th>판정</th><th>의미</th></tr>
+    <tr><td class="n">80 이상</td><td>우수</td><td>목표를 넘겼고 낭비도 통제됨</td></tr>
+    <tr><td class="n">60~79</td><td>합격</td><td>방향이 맞음. 세부 튜닝 여지 있음</td></tr>
+    <tr><td class="n">40~59</td><td>개선 필요</td><td>큰 문제 1~2개가 성과를 누르고 있음</td></tr>
+    <tr><td class="n">40 미만</td><td>재설계 필요</td><td>기본 설정부터 다시</td></tr>
+  </table>
+  <p>첫 게재에서 <b>30~40점</b>이 나오는 것이 정상입니다. 낮게 나와야 고칠 거리가 생깁니다.</p>
+
+  <h3>수강생이 자주 막히는 지점</h3>
+  <ul class="plain">
+    <li><b>"노출이 아예 안 나와요"</b> — 타겟 CPA를 목표값(25,000원)으로 넣은 경우가 대부분입니다.
+      권장 범위 버튼을 쓰게 하세요.</li>
+    <li><b>"전환이 0이에요"</b> — 전환 추적을 껐거나 전환 액션을 저장하지 않은 경우입니다.</li>
+    <li><b>"제외했는데 안 바뀌어요"</b> — <b>다시 게재</b>를 누르지 않은 것입니다.
+      실제 광고도 지난 성과는 소급되지 않는다는 점을 짚어 주세요.</li>
+    <li><b>"점수가 왔다갔다 해요"</b> — 확률 기반이라 정상입니다.
+      전환 12건이면 표준편차가 약 3.5라는 점을 알려 주세요. 오히려 좋은 교육 기회입니다.</li>
+  </ul>
+
+  <h3>토론 주제</h3>
+  <ul class="plain">
+    <li>클릭률이 높은 광고가 항상 좋은 광고인가?</li>
+    <li>전환 정의를 느슨하게 잡으면 누가 이득이고 누가 손해인가?</li>
+    <li>제외 키워드를 계속 늘리면 어디서 멈춰야 하는가?</li>
+    <li>브랜드 키워드는 싸고 잘 전환되는데, 왜 그것만으로는 성장할 수 없는가?</li>
+  </ul>
+
+  <div class="note"><b>도구 정보</b> — 이 실습 도구는 오픈소스입니다.
+    수정하거나 다른 업종용으로 바꿔 쓸 수 있습니다.
+    <br>실습 링크 · <b>redskio.github.io/google-ads-search-sim</b>
+    <br>소스 · <b>github.com/redskio/google-ads-search-sim</b></div>
+</section>
+
+</body>
+</html>
