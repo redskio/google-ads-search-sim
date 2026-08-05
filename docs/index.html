@@ -394,6 +394,34 @@ function mulberry32(a) {
 /* 문자열 → 0..1 안정 난수 (키워드 속성 생성용) */
 const rnd1 = (s, salt = "") => mulberry32(hashStr(s + "|" + salt))();
 
+/* ── 확률 표본 ────────────────────────────────────────
+   광고 성과는 기댓값이 아니라 표본이다. 노출·클릭·전환을 실제로 뽑아야
+   "전환 12건과 14건은 사실상 같은 성과"라는 감각이 생긴다.
+   시드 기반 난수를 쓰므로 같은 설정이면 같은 결과가 나온다.        */
+function gaussRand(rng) {
+  let u = 0, v = 0;
+  while (u === 0) u = rng();
+  while (v === 0) v = rng();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+function samplePoisson(lam, rng) {
+  if (!(lam > 0)) return 0;
+  if (lam > 30) return Math.max(0, Math.round(lam + Math.sqrt(lam) * gaussRand(rng)));
+  const L = Math.exp(-lam);
+  let k = 0, prod = 1;
+  do { k++; prod *= rng(); } while (prod > L && k < 400);
+  return k - 1;
+}
+function sampleBinom(n, prob, rng) {
+  n = Math.round(n);
+  if (n <= 0 || !(prob > 0)) return 0;
+  if (prob >= 1) return n;
+  const mean = n * prob;
+  if (mean < 12) return Math.min(n, samplePoisson(mean, rng));            /* 희귀 사건 */
+  if (n - mean < 12) return n - Math.min(n, samplePoisson(n - mean, rng));
+  return clamp(Math.round(mean + Math.sqrt(mean * (1 - prob)) * gaussRand(rng)), 0, n);
+}
+
 /* ── 업종 사전 ────────────────────────────────────────
    각 업종은 시장 단가·전환율·계절성과 "우리 고객이 아닌 검색" 테마를 정의한다.
    수강생이 고른 업종이 시뮬레이션 파라미터로 그대로 들어간다.            */
@@ -681,7 +709,7 @@ function qualityScore(kwObj, ad, matchType, prof) {
 
   const qs = clamp(Math.round(relevance + ctrScore + landing), 1, 10);
   return {
-    qs, sameDomain,
+    qs, sameDomain, inHead,
     parts: {
       relevance: relevance >= 2.4 ? "평균 이상" : relevance >= 1.4 ? "평균" : "평균 미만",
       ctr: ctrScore >= 2.4 ? "평균 이상" : ctrScore >= 1.4 ? "평균" : "평균 미만",
@@ -816,9 +844,23 @@ function simulate(rawCfg) {
       + clamp(ad.sitelinks.length / 4, 0, 1) * 0.12
       + clamp(ad.callouts.length / 4, 0, 1) * 0.06
       + clamp((ad.headlines.length - 3) / 12, 0, 1) * 0.08;
+    /* 자격 선별(qualifying) — 광고문구에 가격·조건을 밝히면 클릭은 줄지만
+       클릭한 사람의 구매 의사는 높다. 반대로 "무료·할인"만 앞세우면
+       클릭은 몰리는데 전환은 안 된다. 클릭률과 전환율을 떼어놓는 실제 장치다. */
+    const adText = (ad.headlines.join(" ") + " " + ad.descriptions.join(" ")).toLowerCase();
+    const priced = /(원|만원|유료|구독료|월 정액|프리미엄|기업 전용|b2b|견적)/.test(adText);
+    const baiting = /(무료|공짜|이벤트|추첨|경품|100%|최저가)/.test(adText);
+    const qualCtr = (priced ? 0.80 : 1) * (baiting ? 1.28 : 1);
+    const qualCvr = (priced ? 1.48 : 1) * (baiting ? 0.55 : 1);
     const kws = (g.keywords || []).map(k => {
       const o = classifyKeyword(k.text, prof);
       const q = qualityScore(o, ad, k.match, prof);
+      /* 잠재 요인 — 같은 품질평가점수라도 소재가 유난히 잘 먹히거나,
+         클릭은 오는데 페이지에서 이탈하는 경우가 있다.
+         깔때기 단계를 서로 떼어놓아 "클릭은 좋은데 전환이 없다" 같은
+         상황이 실제로 나타나게 한다. */
+      const creativeMult = 0.70 + mulberry32(hashStr(k.text + "|c|" + ad.headlines.join("~") + ad.descriptions.join("~")))() * 0.70;
+      const pageMult = 0.62 + mulberry32(hashStr(k.text + "|p|" + ad.finalUrl + "|" + prof.biz.url))() * 0.90;
       let queries = buildQueries(o, k.match, mulberry32(hashStr(k.text + k.match + cfg.biz.industry)), prof);
       /* 제외 키워드로 걸러진 검색어는 아예 노출되지 않는다 */
       queries = queries.map(x => ({ ...x, blockedBy: negBlocks(x.q, cfg.negatives) }));
@@ -829,9 +871,10 @@ function simulate(rawCfg) {
       const selfBlocked = !!(queries.find(x => x.q === o.text) || {}).blockedBy;
       const blockedShare = 1 - (liveSum / (queries.reduce((s, x) => s + x.share, 0) || 1));
       return { ...o, match: k.match, qs: q.qs, qsParts: q.parts, sameDomain: q.sameDomain,
+        creativeMult, pageMult, copyFit: q.inHead,
         group: g.name, groupIndex: gi, queries: live, allQueries: queries, selfBlocked, blockedShare };
     });
-    return { name: g.name, ad, extBoost, kws, index: gi };
+    return { name: g.name, ad, extBoost, qualCtr, qualCvr, priced, baiting, kws, index: gi };
   });
   const kws = groups.flatMap(g => g.kws);
 
@@ -935,29 +978,32 @@ function simulate(rawCfg) {
             const rankRatio = myRank / Math.max(1, compRank);
             const isRank = clamp(0.96 * (1 - Math.exp(-1.9 * rankRatio)), 0, 0.94);
             const avgPos = clamp(1 + 3.6 * Math.exp(-2.1 * rankRatio), 1, 5.2);
-            impr = eligible * isRank * learn;
-            lostRank = eligible - impr;
+            const imprMean = eligible * isRank * learn;
+            impr = samplePoisson(imprMean, rng);
+            lostRank = Math.max(0, eligible - impr);
             const relAvg = k.queries.reduce((s, q) => s + q.w * REL_WEIGHT[q.rel], 0);
             const baseCtr = posCtr(avgPos) * m.ctrMult;
             const qsCtrBoost = 0.68 + (k.qs / 10) * 0.62;
-            const ctr = clamp(baseCtr * qsCtrBoost * (0.55 + relAvg * 0.6) * g.extBoost * dispMix.ctr, 0.0002, 0.35);
-            clicks = impr * ctr;
+            const ctr = clamp(baseCtr * qsCtrBoost * (0.55 + relAvg * 0.6) * g.extBoost * dispMix.ctr * k.creativeMult * g.qualCtr * (0.48 + k.copyFit * 0.62), 0.0002, 0.35);
+            clicks = sampleBinom(impr, ctr, rng);
             const rawPrice = (compRank * 0.86) / Math.max(1, k.qs) + 10;
             cpc = rawPrice <= effBid ? rawPrice : effBid * (0.86 + 0.12 * clamp(effBid / rawPrice, 0, 1));
             cpc = clamp(cpc, 100, Math.max(100, effBid)) * dispMix.cpc;
             if (cfg.bidding === "max_clicks") cpc *= 0.88;
             if (cfg.bidding === "max_conv" || cfg.bidding === "target_cpa") cpc *= learnCpa;
-            const landingFit = (g.ad.finalUrl && g.ad.finalUrl.startsWith("http") ? 1 : 0.25) * (0.55 + (k.sameDomain || 0) * 0.45);
-            convRate = goal.cvr * k.cvrMult * (0.6 + (k.qs / 10) * 0.7) * landingFit * geoFit * langFit * dispMix.cvr * cvrDay;
+            /* 방문 페이지 — 광고에서 약속한 것과 다른 곳으로 보내면 전환은 무너진다 */
+            const landingFit = (g.ad.finalUrl && g.ad.finalUrl.startsWith("http") ? 1 : 0.22)
+              * (k.sameDomain === 1 ? 1 : k.sameDomain ? 0.34 : 0.24);
+            convRate = goal.cvr * k.cvrMult * (0.6 + (k.qs / 10) * 0.7) * landingFit * geoFit * langFit * dispMix.cvr * cvrDay * k.pageMult * g.qualCvr;
             if (cfg.bidding === "target_cpa" || cfg.bidding === "max_conv") convRate *= (d < bid.learnDays ? 0.7 : 1.12);
           } else {
             /* 디스플레이 — 순위 경쟁보다 예산이 주된 제약. 빈도가 높을수록 반응이 떨어진다 */
             const p = u.p;
             const freqDecay = 1 / (1 + 0.14 * (freqCap - 1));
-            impr = eligible * clamp(effBid / Math.max(1, marketAvg * 1.6), 0.05, 1.6) * learn;
+            impr = samplePoisson(eligible * clamp(effBid / Math.max(1, marketAvg * 1.6), 0.05, 1.6) * learn, rng);
             lostRank = Math.max(0, eligible - impr);
             const ctr = clamp(0.0062 * PLACE_CTR[p.rel] * freqDecay, 0.0002, 0.08);
-            clicks = impr * ctr;
+            clicks = sampleBinom(impr, ctr, rng);
             cpc = clamp(marketAvg * (0.55 + pressure * 0.5), 90, Math.max(100, effBid));
             const landingFit = (groups[0].ad.finalUrl || "").startsWith("http") ? 1 : 0.3;
             convRate = goal.cvr * 0.16 * PLACE_CVR[p.rel] * prof.ind.cvr * prof.model.cvr
@@ -995,7 +1041,8 @@ function simulate(rawCfg) {
       if (sg.u.kind === "kw") {
         const k = sg.u.k;
         k.queries.forEach(q => {
-          const qc = clicks * q.w, qconv = qc * segCvr * REL_WEIGHT[q.rel];
+          const qc = clicks * q.w;
+          const qconv = sampleBinom(qc, clamp(segCvr * REL_WEIGHT[q.rel], 0, 1), rng);
           const key = q.q + "||" + k.text;
           const prev = qAgg.get(key) || { q: q.q, kw: k.text, group: k.group, match: k.match, rel: q.rel, impr: 0, clicks: 0, cost: 0, conv: 0 };
           prev.impr += impr * q.w; prev.clicks += qc; prev.cost += cost * q.w; prev.conv += qconv;
@@ -1009,7 +1056,7 @@ function simulate(rawCfg) {
         ga.impr += impr; ga.clicks += clicks; ga.cost += cost; ga.conv += segConv;
       } else {
         const p = sg.u.p;
-        segConv = clicks * segCvr;
+        segConv = sampleBinom(clicks, clamp(segCvr, 0, 1), rng);
         const prev = placeAgg.get(p.name) || { name: p.name, rel: p.rel, impr: 0, clicks: 0, cost: 0, conv: 0 };
         prev.impr += impr; prev.clicks += clicks; prev.cost += cost; prev.conv += segConv;
         placeAgg.set(p.name, prev);
