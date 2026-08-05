@@ -52,6 +52,13 @@ python3 -m http.server 8777 --directory docs
 
 `http://localhost:8777` 로 접속합니다.
 
+## 보고서 다운로드
+
+- 개별 CSV는 `<업체명>_campaign_daily.csv` 처럼 한글 파일명으로 저장됩니다.
+- **전체 보고서 ZIP으로 받기** 는 CSV 5종을 ZIP 하나로 묶습니다. 브라우저가 한 사이트의
+  연속 다운로드를 차단하기 때문에, 여러 파일을 따로 내려받지 않고 한 번에 받습니다.
+- 모든 CSV는 UTF-8 BOM으로 저장되어 엑셀에서 한글이 깨지지 않습니다.
+
 ## 동작 환경
 
 - 최신 Chrome·Safari·Firefox·Edge (데스크톱/모바일)
